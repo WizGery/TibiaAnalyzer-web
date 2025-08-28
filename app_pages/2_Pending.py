@@ -51,23 +51,64 @@ TRANSFER_NEG_PAT = re.compile(r"(paid|sent|to|debit|withdraw)", re.I)
 NUMBER_PAT = re.compile(r"[-+]?\d{1,3}(?:[.,]\d{3})*(?:[.,]\d+)?|[-+]?\d+")
 
 def parse_real_balance(text: str) -> int:
+    """
+    Calcula el 'balance real' desde:
+      1) Resumen de Party Hunt (con 'Balance:' de sesión y balances por jugador indentados):
+         - balance_real_por_persona = Balance_total_sesion / nº_jugadores
+      2) Texto de transferencias (paid/sent/received...):
+         - suma positiva/negativa según palabras clave.
+    """
+    lines = text.splitlines()
+
+    def to_int(s: str) -> int:
+        s = s.replace(".", "").replace(",", "")
+        try:
+            return int(s)
+        except Exception:
+            return 0
+
+    # 1) Intentar formato "Party Hunt" con 'Balance:' de sesión y balances por jugador
+    session_total = None
+    member_count = 0
+    balance_re = re.compile(r"Balance\s*:\s*([-+]?\d{1,3}(?:[.,]\d{3})*(?:[.,]\d+)?|[-+]?\d+)", re.I)
+
+    for line in lines:
+        m = balance_re.search(line)
+        if not m:
+            continue
+        val = to_int(m.group(1))
+        indent = len(line) - len(line.lstrip())  # 0 = tope, >0 = indentado (jugador)
+        if indent == 0 and session_total is None:
+            # Primer 'Balance:' sin indentación -> total de la sesión
+            session_total = val
+        else:
+            # Balances por jugador (indentados)
+            member_count += 1
+
+    if session_total is not None:
+        divisor = member_count if member_count > 0 else 1
+        return int(round(session_total / divisor))
+
+    # 2) Modo transferencias: sumar SOLO líneas con palabras clave (no loot/supplies/damage/healing)
     total = 0
-    for line in text.splitlines():
+    for line in lines:
+        has_pos = bool(TRANSFER_POS_PAT.search(line))
+        has_neg = bool(TRANSFER_NEG_PAT.search(line))
+        if not (has_pos or has_neg):
+            continue  # ignorar líneas normales
+
         nums = NUMBER_PAT.findall(line)
         if not nums:
             continue
-        def to_int(s):
-            s = s.replace(".", "").replace(",", "")
-            try:
-                return int(s)
-            except Exception:
-                return 0
         amount = to_int(nums[0])
-        if TRANSFER_NEG_PAT.search(line) and not TRANSFER_POS_PAT.search(line):
+
+        if has_neg and not has_pos:
             total -= amount
         else:
             total += amount
+
     return total
+
 
 # ---------- formatting helpers ----------
 def fmt_int(val):
