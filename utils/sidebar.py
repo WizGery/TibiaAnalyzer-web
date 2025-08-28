@@ -38,7 +38,7 @@ def render_global_sidebar():
     """, unsafe_allow_html=True)
 
     # ===== Backup (expander) =====
-    with st.expander("Backup", expanded=False):
+    with st.expander("💾 Backup", expanded=False):
         # Export
         data_bytes, fname = export_backup_bytes()
         st.download_button(
