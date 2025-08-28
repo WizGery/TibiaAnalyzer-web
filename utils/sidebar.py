@@ -138,4 +138,3 @@ def render_global_sidebar():
                 st.success("Hashes cleared.")
             except Exception as e:
                 st.error(f"Could not clear hashes: {e}")
-
