@@ -1,12 +1,9 @@
-# pages/3_Upload_JSON.py
+# app_pages/3_Upload_JSON.py
 from __future__ import annotations
 import streamlit as st
 
 from utils.sidebar import render_global_sidebar
 from utils.data import process_uploads  # uses ta_core.add_uploaded_files under the hood
-
-# Page config (per your convention)
-st.set_page_config(page_title="Upload JSON • Tibia Analyzer", page_icon="📤", layout="wide")
 
 # Global sidebar (Backup + Danger zone)
 with st.sidebar:

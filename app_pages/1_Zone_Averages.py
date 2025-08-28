@@ -1,4 +1,4 @@
-# pages/1_Zone_Averages.py
+# app_pages/1_Zone_Averages.py
 from __future__ import annotations
 from typing import List, Dict, Callable
 import re

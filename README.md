@@ -15,7 +15,7 @@ App para ejecutar Tibia Analyzer en la web con **Streamlit Community Cloud** (gr
 3. Ejecuta la app:
 
    ```bash
-   streamlit run Home.py
+   streamlit run streamlit_app.py
    ```
 4. Abre [http://localhost:8501](http://localhost:8501).
 

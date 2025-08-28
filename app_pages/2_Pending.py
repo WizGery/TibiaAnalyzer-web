@@ -1,4 +1,4 @@
-# pages/2_Pending.py
+# app_pages/2_Pending.py
 from typing import List, Dict, Callable
 import re
 import json
@@ -10,9 +10,6 @@ from ta_core.normalizer import normalize_records
 from ta_core.repository import load_store, save_store
 
 from utils.sidebar import render_global_sidebar  # Global sidebar (Backup + Danger zone)
-
-# ---- Page config (per your convention) ----
-st.set_page_config(page_title="Pending • Tibia Analyzer", page_icon="📝", layout="wide")
 
 # ---- Sidebar global on every page ----
 with st.sidebar:

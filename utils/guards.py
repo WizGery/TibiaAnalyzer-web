@@ -19,7 +19,7 @@ def require_login(enforce: bool | None = None):
         st.stop()
     # Modo desbloqueado: mostramos una nota suave si no hay sesión
     if not st.session_state.get("auth_ok"):
-        st.caption("🔓 Login is optional for now; pages are temporarily unlocked.")
+        st.caption("🔓 Login is optional for now; app_pages are temporarily unlocked.")
 
 def public_note():
     st.caption("Login is optional for now; all sections are temporarily unlocked.")
