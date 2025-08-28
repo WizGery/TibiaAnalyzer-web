@@ -27,6 +27,26 @@ def render_global_sidebar():
     """Sidebar global con Backup y Danger zone. Llamar desde cada página."""
     ensure_data_dirs()
 
+    # --- Maquillaje: mostrar "Home" como texto del primer item del sidebar ---
+    # (El verdadero nombre proviene del main file 'streamlit_app.py', que no podemos cambiar aquí)
+    st.markdown(f"""
+    <style>
+      /* Oculta el texto original del primer enlace del nav lateral y muestra 'Home' */
+      [data-testid="stSidebarNav"] li:first-child a p,
+      [data-testid="stSidebarNav"] li:first-child a span {{
+        visibility: hidden;
+        position: relative;
+      }}
+      [data-testid="stSidebarNav"] li:first-child a p::after,
+      [data-testid="stSidebarNav"] li:first-child a span::after {{
+        content: "Home";
+        visibility: visible;
+        position: absolute;
+        left: 0; right: 0;
+      }}
+    </style>
+    """, unsafe_allow_html=True)
+
     st.markdown("### Backup")
 
     # Export
@@ -42,22 +62,19 @@ def render_global_sidebar():
 
     # Import (FULL REPLACE)
     bk = st.file_uploader(
-        "📥 Import backup (.json)",
+        "📥 Import backup (.json) — FULL REPLACE",
         type=["json"],
         accept_multiple_files=False,
         key="sb_import_backup",
         help="Imports the backup and replaces ALL current data. Use with caution.",
     )
-    if bk is not None and st.button("Import backup", key="sb_btn_import"):
+    if bk is not None and st.button("Import backup (replace all)", key="sb_btn_import"):
         try:
             # 1) Vaciar por completo datos actuales
             save_store([])     # deja el store vacío (sin processed ni pending)
             clear_hashes()     # evita que queden huellas de dedupe antiguas
 
-            # 2) Importar el backup
-            #   Esta función carga el contenido del backup al store.
-            #   Antes sustituía solo 'processed' pero como hemos vaciado,
-            #   el efecto es REEMPLAZO TOTAL.
+            # 2) Importar el backup (como hemos vaciado, el efecto es reemplazo total)
             import_backup_replace_processed(bk.read())
 
             st.success("Backup imported. All previous data was replaced.")
