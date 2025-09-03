@@ -31,6 +31,7 @@ ALIASES: Dict[str, List[str]] = {
     "level":         ["Level", "level"]
 }
 
+# ---------- helpers internos ----------
 def _first_key(d: Dict[str, Any], keys: List[str]):
     for k in keys:
         if k in d and d[k] not in (None, ""):
@@ -66,6 +67,63 @@ def _duration_to_sec(v) -> int:
     except Exception:
         return 0
 
+# --- helpers: Killed Monsters -> mapping ---
+def _km_list_to_mapping(val) -> Dict[str, float]:
+    """
+    Convierte la lista de dicts [{'Name': ..., 'Count': ...}, ...]
+    a {'Monster Name': count, ...}. Acepta string JSON o literal.
+    """
+    out: Dict[str, float] = {}
+    if val is None:
+        return out
+    if isinstance(val, str):
+        try:
+            import json
+            val = json.loads(val)
+        except Exception:
+            try:
+                import ast
+                val = ast.literal_eval(val)
+            except Exception:
+                return out
+    if isinstance(val, (list, tuple)):
+        for item in val:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("Name") or item.get("name") or "").strip()
+            try:
+                cnt = float(item.get("Count") or item.get("count") or 0)
+            except Exception:
+                cnt = 0
+            if name:
+                out[name] = out.get(name, 0.0) + cnt
+    elif isinstance(val, dict):
+        # ya viene como mapping
+        for k, v in val.items():
+            try:
+                out[str(k)] = float(v or 0)
+            except Exception:
+                continue
+    return out
+
+def _extract_kills_from_raw(rec: Dict[str, Any]) -> Dict[str, float]:
+    """
+    Extrae kills por monstruo desde el registro crudo:
+    - 'Killed Monsters' (lista Name/Count)
+    - 'killed_monsters' (lista)
+    - 'kills_by_monster' (mapping)
+    """
+    if not isinstance(rec, dict):
+        return {}
+    if "Killed Monsters" in rec:
+        return _km_list_to_mapping(rec.get("Killed Monsters"))
+    if "killed_monsters" in rec:
+        return _km_list_to_mapping(rec.get("killed_monsters"))
+    if "kills_by_monster" in rec:
+        return _km_list_to_mapping(rec.get("kills_by_monster"))
+    return {}
+
+# ---------- normalizador ----------
 def normalize_records(raw_records: List[Dict]) -> Tuple[pd.DataFrame, pd.DataFrame]:
     rows: List[Dict[str, Any]] = []
     pendings: List[Dict[str, Any]] = []
@@ -147,7 +205,7 @@ def normalize_records(raw_records: List[Dict]) -> Tuple[pd.DataFrame, pd.DataFra
             vocation_duo=vocation_duo,
             zona=zona,
             has_all_meta=has_meta,
-            source_raw=r,
+            source_raw=r,  # guardamos el crudo para extraer kills luego
             level_bucket=level_bucket,
             level_min=level_min if level_min is not None else -1,
             level_max=level_max if level_max is not None else -1,
@@ -166,11 +224,17 @@ def normalize_records(raw_records: List[Dict]) -> Tuple[pd.DataFrame, pd.DataFra
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int)
         for col in ["vocation","mode","vocation_duo","zona","level_bucket"]:
             df[col] = df[col].astype(str)
+        # ---- NUEVO: crea kills_by_monster desde el raw ----
+        if "kills_by_monster" not in df.columns or df["kills_by_monster"].isna().all():
+            df["kills_by_monster"] = df.get("source_raw", pd.Series([{}]*len(df))).apply(_extract_kills_from_raw)
 
     if not pending_df.empty:
         for col in ["xp_gain","raw_xp_gain","supplies","loot","balance","duration_sec","level_min","level_max"]:
             pending_df[col] = pd.to_numeric(pending_df[col], errors="coerce").fillna(0).astype(int)
         for col in ["vocation","mode","vocation_duo","zona","level_bucket"]:
             pending_df[col] = pending_df[col].astype(str)
+        # ---- NUEVO: también en pendings (por consistencia) ----
+        if "kills_by_monster" not in pending_df.columns or pending_df["kills_by_monster"].isna().all():
+            pending_df["kills_by_monster"] = pending_df.get("source_raw", pd.Series([{}]*len(pending_df))).apply(_extract_kills_from_raw)
 
     return df, pending_df

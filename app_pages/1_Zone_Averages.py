@@ -2,19 +2,19 @@
 from __future__ import annotations
 from typing import List, Dict, Callable
 import re
+import os
 import pandas as pd
 import streamlit as st
 
 from ta_core.repository import load_store
 from ta_core.normalizer import normalize_records
-from ta_core.aggregator import aggregate_by_zone
+from ta_core.aggregator import aggregate_by_zone, compute_monsters_kph_for_df
 from ta_core.export import df_to_csv_bytes
 
 from utils.sidebar import render_global_sidebar
 
 with st.sidebar:
     render_global_sidebar()
-
 
 # ---------- helpers ----------
 def fmt_int(val):
@@ -94,6 +94,63 @@ def fmt_duration_text(hours_float: float) -> str:
     if m == 0:
         return f"{h}h"
     return f"{h}h {m}min"
+
+# ---------- Bestiary helpers ----------
+_BESTIARY_REQ = {
+    "Harmless": 25,
+    "Trivial": 250,
+    "Easy": 500,
+    "Medium": 1000,
+    "Hard": 2500,
+    "Challenging": 5000,
+}
+
+def _norm_diff(diff: str | None) -> str | None:
+    if not diff:
+        return None
+    d = str(diff).strip()
+    for k in _BESTIARY_REQ.keys():
+        if d.lower() == k.lower():
+            return k
+    return None
+
+def _req_for_diff(diff: str | None) -> int | None:
+    d = _norm_diff(diff)
+    return _BESTIARY_REQ.get(d) if d else None
+
+def _fmt_eta_hours(h: float | None) -> str:
+    if h is None:
+        return "—"
+    if h <= 0:
+        return "0h"
+    mins = int(round(h * 60))
+    H, M = divmod(mins, 60)
+    return f"{H}h {M:02d}m" if H > 0 else f"{M}min"
+
+# load difficulties from CSV
+@st.cache_data(show_spinner=False)
+def load_bestiary_lookup() -> Dict[str, str]:
+    candidates = [
+        os.path.join("data", "monster_difficulty.csv"),
+        os.path.join("ta_core", "bestiary", "monster_difficulty.csv"),
+        "monster_difficulty.csv",
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            try:
+                df = pd.read_csv(path)
+                lut = {}
+                for _, r in df.iterrows():
+                    m = str(r.get("monster", "")).strip()
+                    d = str(r.get("difficulty", "")).strip()
+                    if m and d:
+                        lut[m.lower()] = d
+                return lut
+            except Exception:
+                pass
+    return {}
+
+BESTIARY_LUT = load_bestiary_lookup()
 
 # ---------- data ----------
 st.title("Zone Averages")
@@ -216,7 +273,7 @@ else:
         else:
             c[5].markdown("")
 
-    # rows + expander "More details" under each summary row
+    # rows + expander
     for _, r in current_df.iterrows():
         zone_name = str(r.get("Zone", ""))
         cols = st.columns([3, 1, 1, 1, 1, 1])
@@ -231,14 +288,10 @@ else:
             cols[5].write("")
 
         with st.expander("More details"):
-            # raw hunts for this zone and active filters
             zdf = filtered[filtered["zona"] == zone_name].copy()
-
-            # to datetime
             zdf["session_start_dt"] = pd.to_datetime(zdf.get("session_start"), errors="coerce")
             zdf["session_end_dt"] = pd.to_datetime(zdf.get("session_end"), errors="coerce")
 
-            # duration per hunt -> Duration text
             if "duration_sec" in zdf.columns:
                 zdf["__hours"] = zdf["duration_sec"].astype(float) / 3600.0
             else:
@@ -247,7 +300,6 @@ else:
                 ).dt.total_seconds() / 3600.0
             zdf["Duration"] = zdf["__hours"].apply(fmt_duration_text)
 
-            # stamina per file
             if "raw_xp_gain" in zdf.columns:
                 zdf["Stamina"] = zdf["raw_xp_gain"].astype(float) * 1.5
             else:
@@ -266,7 +318,6 @@ else:
             if "balance" in zdf.columns:
                 cols_out.append("balance")
 
-            # latest 10 hunts
             if "session_end_dt" in zdf.columns:
                 zdf = zdf.sort_values(by="session_end_dt", ascending=False)
             elif "session_start_dt" in zdf.columns:
@@ -289,9 +340,61 @@ else:
                     hide_index=True,
                 )
             )
+
+            # ---------- Bestiary ETA ----------
+            st.markdown("---")
+            st.markdown("#### 📘 Bestiary — time to complete (ETA)")
+
+            zone_all = filtered[filtered["zona"] == zone_name].copy()
+            monsters_kph: Dict[str, float] = compute_monsters_kph_for_df(zone_all)
+
+            if not monsters_kph:
+                st.info("No **KPH per monster** data in this zone yet. "
+                        "Make sure to log `kills_by_monster` in your hunts.")
+            else:
+                rows_eta = []
+                for monster, kph in monsters_kph.items():
+                    name_lc = str(monster).lower().strip()
+                    diff = BESTIARY_LUT.get(name_lc)
+                    req = _req_for_diff(diff)
+                    eta_h = None
+                    if req is not None and kph > 0:
+                        eta_h = float(req) / float(kph)
+                    rows_eta.append({
+                        "Monster": monster,
+                        "Difficulty": diff or "—",
+                        "Required": req if req is not None else "—",
+                        "KPH": round(float(kph), 2),
+                        "ETA": _fmt_eta_hours(eta_h),
+                    })
+
+                def _sort_key(row: Dict) -> tuple:
+                    eta = row.get("ETA", "—")
+                    if eta == "—":
+                        return (1, 10**9, row["Monster"].lower())
+                    txt = str(eta)
+                    mins = 0
+                    if "h" in txt:
+                        try:
+                            parts = txt.replace("min", "").split("h")
+                            H = int(parts[0].strip())
+                            M = int(parts[1].strip()) if parts[1].strip() else 0
+                            mins = H * 60 + M
+                        except Exception:
+                            mins = 10**8
+                    else:
+                        try:
+                            mins = int(txt.replace("min", "").strip())
+                        except Exception:
+                            mins = 10**8
+                    return (0, mins, row["Monster"].lower())
+
+                rows_eta_sorted = sorted(rows_eta, key=_sort_key)
+                df_eta = pd.DataFrame(rows_eta_sorted, columns=["Monster", "Difficulty", "Required", "KPH", "ETA"])
+                st.table(style_center(df_eta, {"KPH": fmt_int}, hide_index=True))
         st.divider()
 
-# CSV export of the summary table
+# CSV export
 csv_bytes = df_to_csv_bytes(
     current_df if current_df is not None and not current_df.empty else pd.DataFrame()
 )
