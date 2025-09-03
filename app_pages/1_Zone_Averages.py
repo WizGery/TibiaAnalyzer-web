@@ -12,6 +12,7 @@ from ta_core.aggregator import aggregate_by_zone, compute_monsters_kph_for_df
 from ta_core.export import df_to_csv_bytes
 
 from utils.sidebar import render_global_sidebar
+from utils.tibiawiki import get_monster_icon_data_uri  # usamos data URI (backend)
 
 with st.sidebar:
     render_global_sidebar()
@@ -139,7 +140,7 @@ def load_bestiary_lookup() -> Dict[str, str]:
         if os.path.exists(path):
             try:
                 df = pd.read_csv(path)
-                lut = {}
+                lut: Dict[str, str] = {}
                 for _, r in df.iterrows():
                     m = str(r.get("monster", "")).strip()
                     d = str(r.get("difficulty", "")).strip()
@@ -360,14 +361,22 @@ else:
                     eta_h = None
                     if req is not None and kph > 0:
                         eta_h = float(req) / float(kph)
+
+                    data_uri_pack = get_monster_icon_data_uri(monster)
+                    if data_uri_pack:
+                        data_uri, src_url = data_uri_pack
+                    else:
+                        data_uri, src_url = None, None
+
                     rows_eta.append({
+                        "data_uri": data_uri,
+                        "src_url": src_url or "",
                         "Monster": monster,
-                        "Difficulty": diff or "—",
-                        "Required": req if req is not None else "—",
                         "KPH": round(float(kph), 2),
                         "ETA": _fmt_eta_hours(eta_h),
                     })
 
+                # ordenar por ETA (sin ETA al final)
                 def _sort_key(row: Dict) -> tuple:
                     eta = row.get("ETA", "—")
                     if eta == "—":
@@ -390,8 +399,60 @@ else:
                     return (0, mins, row["Monster"].lower())
 
                 rows_eta_sorted = sorted(rows_eta, key=_sort_key)
-                df_eta = pd.DataFrame(rows_eta_sorted, columns=["Monster", "Difficulty", "Required", "KPH", "ETA"])
-                st.table(style_center(df_eta, {"KPH": fmt_int}, hide_index=True))
+
+                # Cabecera (grid: Monster | KPH | ETA)
+                st.markdown(
+                    """
+                    <div style="display:grid;grid-template-columns:auto 120px 120px;gap:0.5rem;
+                                padding:6px 8px;font-weight:600;border-bottom:1px solid rgba(255,255,255,0.08);">
+                      <div>Monster</div>
+                      <div style="text-align:right;">KPH</div>
+                      <div style="text-align:right;">ETA</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+                # Filas: {gif}{nombre} con iconos 48x48
+                rows_html = []
+                for row in rows_eta_sorted:
+                    if row["data_uri"]:
+                        icon_box = (
+                            f'<div style="width:48px;height:48px;border-radius:8px;overflow:hidden;'
+                            f'display:inline-flex;align-items:center;justify-content:center;'
+                            f'background:rgba(255,255,255,0.04);flex:0 0 auto;">'
+                            f'  <img src="{row["data_uri"]}" title="{row["src_url"]}" '
+                            f'       style="width:100%;height:100%;object-fit:contain;'
+                            f'              image-rendering:pixelated;display:block;">'
+                            f'</div>'
+                        )
+                    else:
+                        icon_box = (
+                            '<div style="width:48px;height:48px;border-radius:8px;overflow:hidden;'
+                            'display:inline-flex;align-items:center;justify-content:center;'
+                            'background:rgba(255,255,255,0.04);flex:0 0 auto;" title="(no image)">🖼️</div>'
+                        )
+
+                    monster_cell = (
+                        f'<div style="display:flex;align-items:center;gap:10px;">'
+                        f'  {icon_box}'
+                        f'  <span style="line-height:48px;">{row["Monster"]}</span>'
+                        f'</div>'
+                    )
+
+                    rows_html.append(
+                        f'''
+                        <div style="display:grid;grid-template-columns:auto 120px 120px;gap:0.5rem;
+                                    padding:10px 8px;border-bottom:1px solid rgba(255,255,255,0.04);">
+                          <div>{monster_cell}</div>
+                          <div style="text-align:right;">{fmt_int(row["KPH"])}</div>
+                          <div style="text-align:right;">{row["ETA"]}</div>
+                        </div>
+                        '''
+                    )
+
+                st.markdown("".join(rows_html), unsafe_allow_html=True)
+
         st.divider()
 
 # CSV export
