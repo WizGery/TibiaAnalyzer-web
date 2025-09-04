@@ -1,11 +1,6 @@
 # app_pages/home.py
 from __future__ import annotations
 import streamlit as st
-from utils.sidebar import render_global_sidebar
-
-# Sidebar global también en Home
-with st.sidebar:
-    render_global_sidebar()
 
 # ——— Estilos para centrar el bloque y su contenido ———
 st.markdown("""

@@ -6,11 +6,6 @@ import altair as alt
 
 from ta_core.repository import ensure_data_dirs, load_store
 from ta_core.normalizer import normalize_records
-from utils.sidebar import render_global_sidebar
-
-# ── Sidebar global ──
-with st.sidebar:
-    render_global_sidebar()
 
 # ── Helpers ──
 def fmt_int(val) -> str:

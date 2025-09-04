@@ -1,114 +1,96 @@
-
 from __future__ import annotations
-from typing import List, Dict, Tuple, Any, Iterable
+
+"""
+Orquesta el backup/restore de datos.
+
+- export_backup_bytes()  -> devuelve (bytes, filename)
+- import_backup_replace_processed(raw_bytes) -> reemplaza TODO el store con el backup
+
+Notas:
+- Por compatibilidad, si existe una implementación previa en `ta_core.repository`
+  para exportar, la reutilizamos (y normalizamos el tipo de retorno).
+- El import reemplaza TODO el store y limpia hashes.
+"""
+
+from typing import Tuple, Any, Dict, List, Optional
 import json
+from datetime import datetime
 
-from ..repository import load_store, save_store
+# Dependencias de persistencia mínimas
+from ta_core.repository import load_store, save_store
 
-# Importar aquí para evitar ciclos entre repository <-> normalizer
-from ..normalizer import normalize_records
+# Reutilizamos export si todavía existe en repository (compatibilidad)
+try:
+    from ta_core.repository import export_backup_bytes as _repo_export_backup_bytes  # type: ignore[attr-defined]
+except Exception:  # ImportError u otros: no lo tomamos como error fatal
+    _repo_export_backup_bytes = None  # type: ignore[assignment]
 
 
-def _key_from_store_item(orig: Dict[str, Any]) -> Tuple[str, str, int]:
+def _normalize_export_result(out: Any) -> Tuple[bytes, str]:
     """
-    Clave estable para identificar hunts tanto en 'store' original como en normalizados:
-    (session_start, session_end, xp_gain_int)
-    Acepta claves en inglés o las usadas en el backup original.
+    Acepta bytes o (bytes, filename) y devuelve una tupla normalizada.
     """
-    o_start = str(orig.get("Session start", orig.get("session_start", "")))
-    o_end = str(orig.get("Session end", orig.get("session_end", "")))
-
-    xo_raw = str(orig.get("XP Gain", orig.get("xp_gain", 0)))
-    # limpiar separadores
-    xo_raw = xo_raw.replace(".", "").replace(",", "")
-    try:
-        xo = int(float(xo_raw))
-    except Exception:
-        xo = 0
-    return (o_start, o_end, xo)
+    if isinstance(out, tuple) and len(out) == 2 and isinstance(out[0], (bytes, bytearray)) and isinstance(out[1], str):
+        return bytes(out[0]), out[1]
+    if isinstance(out, (bytes, bytearray)):
+        return bytes(out), "tibia_analyzer_backup.json"
+    raise ValueError("Unexpected export result type; expected bytes or (bytes, filename).")
 
 
-def _key_from_norm_row(row: Dict[str, Any]) -> Tuple[str, str, int]:
+def _fallback_export_bytes() -> Tuple[bytes, str]:
     """
-    Igual que _key_from_store_item pero desde una fila normalizada (dict-like).
+    Exportación de respaldo si no existe la función en repository.
+    Serializa el store tal cual a JSON.
     """
-    s_start = str(row.get("session_start", ""))
-    s_end = str(row.get("session_end", ""))
-    xg = row.get("xp_gain", 0)
-    try:
-        xg_i = int(float(str(xg).replace(".", "").replace(",", "")))
-    except Exception:
-        xg_i = 0
-    return (s_start, s_end, xg_i)
+    data: List[Dict[str, Any]] = load_store()
+    payload: Dict[str, Any] = {
+        "version": 1,
+        "exported_at": datetime.utcnow().isoformat() + "Z",
+        "store": data,
+    }
+    raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    return raw, "tibia_analyzer_backup.json"
 
 
-def import_backup_replace_processed(backup_bytes: bytes) -> None:
+def export_backup_bytes() -> Tuple[bytes, str]:
     """
-    Reemplaza los hunts PROCESADOS por los del backup, manteniendo los PENDIENTES actuales.
-    - Carga store actual
-    - Normaliza para detectar pendientes actuales
-    - Normaliza backup para reconstruir 'procesados' a partir de su fuente original
-    - Construye un nuevo store: (pendientes actuales) + (procesados del backup)
+    Exporta el backup completo de la aplicación.
+    Devuelve: (bytes, nombre_de_archivo)
     """
-    try:
-        obj = json.loads(backup_bytes.decode("utf-8", errors="ignore"))
-    except Exception:
-        obj = {}
+    # Si hay una exportación ya implementada en repository, la usamos.
+    if _repo_export_backup_bytes is not None:
+        out = _repo_export_backup_bytes()  # type: ignore[misc]
+        return _normalize_export_result(out)
 
-    backup_store: List[Dict] = obj.get("store", []) or []
-    # hashes del backup, si los usas, puedes tomarlos de obj.get("hashes", [])
-    # pero la persistencia dependerá de cómo guardes en save_store
+    # Si no, usamos el fallback local.
+    return _fallback_export_bytes()
 
-    # 1) Estado actual
-    current_store: List[Dict] = load_store()
-    cur_norm, cur_pending = normalize_records(current_store)
 
-    # Conjunto de claves de pendientes actuales (para conservarlos tal cual)
-    pending_keys = set(_key_from_norm_row(r) for _, r in cur_pending.iterrows())
+def import_backup_replace_processed(raw_bytes: bytes) -> None:
+    """
+    Importa un backup y **reemplaza** por completo el store actual.
 
-    # 2) Normalizar backup para mapear claves -> registro original
-    b_norm, _ = normalize_records(backup_store)
+    Formatos admitidos:
+      - Dict con clave "store": {"store": [...]}  (nuevo/fallback)
+      - Lista directa de registros: [...]         (compatibilidad)
 
-    # Construir diccionario clave -> item_original_del_backup
-    backup_by_key: Dict[Tuple[str, str, int], Dict[str, Any]] = {}
-    for _, row in b_norm.iterrows():
-        src = row.get("source_raw")
-        if isinstance(src, dict):
-            orig = src
-        else:
-            # Si no viene la fuente, intentamos reconstruir con lo que haya
-            orig = {
-                "Session start": row.get("session_start", ""),
-                "Session end": row.get("session_end", ""),
-                "XP Gain": row.get("xp_gain", 0),
-                "Vocation": row.get("vocation"),
-                "Mode": row.get("mode"),
-                "Zona": row.get("zona"),
-                "Level": row.get("level_bucket"),
-            }
-        backup_by_key[_key_from_norm_row(row)] = orig
+    Lanza ValueError/JSONDecodeError si el contenido no es válido.
+    """
+    text = raw_bytes.decode("utf-8")
+    obj: Any = json.loads(text)
 
-    # 3) Construir nuevo store:
-    #    - conservar PENDIENTES actuales (del store original)
-    #    - añadir PROCESADOS del backup
-    #    Para conservar los pendientes, buscamos en el store actual por clave.
-    current_by_key: Dict[Tuple[str, str, int], Dict[str, Any]] = {}
-    for it in current_store:
-        current_by_key[_key_from_store_item(it)] = it
+    # Detectar forma
+    data: Optional[List[Dict[str, Any]]] = None
 
-    new_store: List[Dict] = []
+    if isinstance(obj, dict) and "store" in obj:
+        maybe_list = obj.get("store")
+        if not isinstance(maybe_list, list):
+            raise ValueError("Backup 'store' must be a list.")
+        data = maybe_list  # type: ignore[assignment]
+    elif isinstance(obj, list):
+        data = obj  # type: ignore[assignment]
+    else:
+        raise ValueError("Backup has unexpected shape. Expected object with 'store' or a list.")
 
-    # 3.a) añadir pendientes actuales (tal cual estaban en current_store)
-    for k in pending_keys:
-        if k in current_by_key:
-            new_store.append(current_by_key[k])
-
-    # 3.b) añadir procesados del backup (todas las claves del backup)
-    for k, it in backup_by_key.items():
-        # si la clave es pendiente actual, ya está añadida como pendiente; no duplicar
-        if k in pending_keys:
-            continue
-        new_store.append(it)
-
-    # 4) Guardar
-    save_store(new_store)
+    # Reemplazar all el store
+    save_store(data if data is not None else [])
