@@ -59,7 +59,7 @@ def _to_text(msg: object) -> str:
 # ----------------------------
 
 def signup(email: str, password: str, username: str) -> tuple[bool, str]:
-    email = (email or "").strip()
+    email = (email or "").strip().lower()
     username = (username or "").strip()
     sb = get_supabase()
     payload_new = {
@@ -83,13 +83,11 @@ def signup(email: str, password: str, username: str) -> tuple[bool, str]:
 
 
 def login(email: str, password: str) -> tuple[bool, str]:
-    """Password login. Returns (ok, message)."""
-    sb = get_supabase()  # tu función que devuelve el cliente cacheado
-    email = (email or "").strip()  # evitar espacios
+    email = (email or "").strip().lower()
+    sb = get_supabase()
     try:
-        # Supabase espera un diccionario con email/password
         sb.auth.sign_in_with_password({"email": email, "password": password})
-        return True, "Signed in successfully."
+        return True, _to_text("Signed in successfully.")
     except AuthApiError as e:
         # Mensajes comunes de GoTrue:
         # - "Invalid login credentials"

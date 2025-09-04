@@ -16,8 +16,8 @@ def _login_tab() -> None:
     col_form, _ = form_cols("sm")
     with col_form:
         with st.form("login_form", clear_on_submit=False):
-            email = st.text_input("Email", value="", placeholder="you@example.com", key="li_email")
-            password = st.text_input("Password", type="password", key="li_pass")
+            email = st.text_input("Email", key="login_email").strip().lower()
+            password = st.text_input("Password", type="password", key="login_pwd")  # sin strip()
             submitted = st.form_submit_button("Login")
 
         if submitted:
