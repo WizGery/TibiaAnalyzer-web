@@ -1,4 +1,3 @@
-# app_pages/1_Zone_Averages.py
 from __future__ import annotations
 from typing import List, Dict, Callable
 import re
@@ -60,19 +59,21 @@ def style_center(
                 pass
     return sty
 
-def make_level_buckets() -> List[str]:
-    buckets = ["8-25", "26-50", "51-75", "76-100"]
-    start = 101
-    while start <= 951:
-        end = start + 49
-        buckets.append(f"{start}-{end}")
-        start = end + 1
-    buckets.append("951-1000")
-    start = 1001
-    while start <= 1901:
-        end = start + 99
-        buckets.append(f"{start}-{end}")
-        start = end + 1
+def make_level_buckets(buckets: list[tuple[int, int]]) -> list[dict]:
+    result = []
+    for (start, end) in buckets:
+        label = f"{start}–{end}"
+        result.append({"label": label, "min": start, "max": end})
+    return result
+
+def make_fixed_size_buckets(start: int, end: int, size: int) -> list[dict]:
+    buckets = []
+    current = start
+    while current <= end:
+        upper = min(current + size, end)
+        label = f"{current}–{upper}"
+        buckets.append({"label": label, "min": current, "max": upper})
+        current = upper + 1
     return buckets
 
 # numeric sort for level ranges like "401-450"
@@ -128,7 +129,6 @@ def _fmt_eta_hours(h: float | None) -> str:
     H, M = divmod(mins, 60)
     return f"{H}h {M:02d}m" if H > 0 else f"{M}min"
 
-# load difficulties from CSV
 @st.cache_data(show_spinner=False)
 def load_bestiary_lookup() -> Dict[str, str]:
     candidates = [
@@ -157,7 +157,8 @@ BESTIARY_LUT = load_bestiary_lookup()
 st.title("Zone Averages")
 store = load_store()
 norm_df, pending_df = normalize_records(store)
-LEVEL_BUCKETS = make_level_buckets()
+
+LEVEL_BUCKETS = []
 
 # ---------- filters ----------
 st.markdown("### Filters")
@@ -249,7 +250,6 @@ if agg_df.empty:
     st.table(pd.DataFrame())
     current_df = agg_df
 else:
-    # sorting controls
     sort_cols = list(agg_df.columns)
     sc1, sc2, _ = st.columns([0.28, 0.28, 0.44])
     with sc1:
@@ -260,7 +260,6 @@ else:
 
     current_df = agg_df.sort_values(by=sort_by, ascending=ascending, kind="mergesort")
 
-    # header row
     hdr = st.container()
     with hdr:
         c = st.columns([3, 1, 1, 1, 1, 1])
@@ -274,7 +273,6 @@ else:
         else:
             c[5].markdown("")
 
-    # rows + expander
     for _, r in current_df.iterrows():
         zone_name = str(r.get("Zone", ""))
         cols = st.columns([3, 1, 1, 1, 1, 1])
@@ -342,7 +340,6 @@ else:
                 )
             )
 
-            # ---------- Bestiary ETA ----------
             st.markdown("---")
             st.markdown("#### 📘 Bestiary — time to complete (ETA)")
 
@@ -350,8 +347,7 @@ else:
             monsters_kph: Dict[str, float] = compute_monsters_kph_for_df(zone_all)
 
             if not monsters_kph:
-                st.info("No **KPH per monster** data in this zone yet. "
-                        "Make sure to log `kills_by_monster` in your hunts.")
+                st.info("No **KPH per monster** data in this zone yet.")
             else:
                 rows_eta = []
                 for monster, kph in monsters_kph.items():
@@ -376,7 +372,6 @@ else:
                         "ETA": _fmt_eta_hours(eta_h),
                     })
 
-                # ordenar por ETA (sin ETA al final)
                 def _sort_key(row: Dict) -> tuple:
                     eta = row.get("ETA", "—")
                     if eta == "—":
@@ -400,7 +395,6 @@ else:
 
                 rows_eta_sorted = sorted(rows_eta, key=_sort_key)
 
-                # Cabecera (grid: Monster | KPH | ETA)
                 st.markdown(
                     """
                     <div style="display:grid;grid-template-columns:auto 120px 120px;gap:0.5rem;
@@ -409,11 +403,8 @@ else:
                       <div style="text-align:right;">KPH</div>
                       <div style="text-align:right;">ETA</div>
                     </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
+                    """, unsafe_allow_html=True)
 
-                # Filas: {gif}{nombre} con iconos 48x48
                 rows_html = []
                 for row in rows_eta_sorted:
                     if row["data_uri"]:
@@ -455,7 +446,6 @@ else:
 
         st.divider()
 
-# CSV export
 csv_bytes = df_to_csv_bytes(
     current_df if current_df is not None and not current_df.empty else pd.DataFrame()
 )

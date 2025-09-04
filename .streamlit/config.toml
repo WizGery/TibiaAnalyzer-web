@@ -1,6 +1,2 @@
 [theme]
 base="dark"
-
-[server]
-maxUploadSize = 200
-enableXsrfProtection = true

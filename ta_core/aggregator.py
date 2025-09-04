@@ -9,7 +9,7 @@ import pandas as pd
 # ============================================================================
 
 # Columnas candidatas para kills por monstruo (dict/JSON/lista de pares)
-_CANDIDATE_KILLS_COLUMNS: tuple[str, ...] = (
+_CANDIDATE_KILLS_COLUMNS: tuple[str, ] = (
     "kills_by_monster",
     "killsByMonster",
     "kills_by_creature",

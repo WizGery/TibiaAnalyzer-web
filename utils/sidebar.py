@@ -107,7 +107,7 @@ def render_global_sidebar():
         ):
             new_store = [it for it in store if _row_key_from_store_item(it) not in processed_keyset]
             save_store(new_store)
-            st.success("Processed data deleted. Recomputing…")
+            st.success("Processed data deleted. Recomputing")
             st.rerun()
 
         # 2) Delete pending (keep processed)
@@ -120,7 +120,7 @@ def render_global_sidebar():
         ):
             new_store = [it for it in store if _row_key_from_store_item(it) not in pending_keyset]
             save_store(new_store)
-            st.success("Pending data deleted. Recomputing…")
+            st.success("Pending data deleted. Recomputing")
             st.rerun()
 
         st.divider()

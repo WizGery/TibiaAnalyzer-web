@@ -70,8 +70,8 @@ def _duration_to_sec(v) -> int:
 # --- helpers: Killed Monsters -> mapping ---
 def _km_list_to_mapping(val) -> Dict[str, float]:
     """
-    Convierte la lista de dicts [{'Name': ..., 'Count': ...}, ...]
-    a {'Monster Name': count, ...}. Acepta string JSON o literal.
+    Convierte la lista de dicts [{'Name': , 'Count': }, ]
+    a {'Monster Name': count, }. Acepta string JSON o literal.
     """
     out: Dict[str, float] = {}
     if val is None:

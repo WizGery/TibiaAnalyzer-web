@@ -1,7 +1,7 @@
 # utils/auth.py
 import re
 import streamlit as st
-import streamlit_authenticator as stauth
+import streamlit as stauth
 
 
 def _is_bcrypt_hash(s: str) -> bool:
