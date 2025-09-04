@@ -2,138 +2,119 @@
 from __future__ import annotations
 
 import os
-from typing import Tuple, Optional
+from typing import Optional, Tuple
 
 import streamlit as st
 from supabase import create_client, Client
-from gotrue.errors import AuthApiError, AuthRetryableError  # lib oficial
+from gotrue.errors import AuthApiError, AuthRetryableError
 
 
-# ----------------------------
-# Internals
-# ----------------------------
-
-def _get_env(key: str) -> str:
-    """Read from st.secrets first, then environment variables."""
-    if key in st.secrets:
-        v = st.secrets[key]
-        if isinstance(v, str) and v.strip():
-            return v
-    v = os.getenv(key, "")
-    if not v:
-        raise RuntimeError(f"Missing environment variable: {key}")
-    return v
-
-
-@st.cache_resource(show_spinner=False)
-def _get_supabase() -> Client:
-    """Internal cached client."""
-    url = st.secrets["SUPABASE_URL"]
-    key = st.secrets["SUPABASE_ANON_KEY"]
+@st.cache_resource
+def _supabase_client() -> Client:
+    """
+    Instancia única de cliente Supabase usando secrets/env.
+    """
+    url = os.environ.get("SUPABASE_URL") or st.secrets.get("SUPABASE_URL", "")
+    key = os.environ.get("SUPABASE_ANON_KEY") or st.secrets.get("SUPABASE_ANON_KEY", "")
+    if not url or not key:
+        raise RuntimeError("Supabase credentials not configured.")
     return create_client(url, key)
 
-# Backwards-compat for auth_repo
+
 def get_supabase() -> Client:
-    return _get_supabase()
+    """API pública para obtener el cliente cacheado."""
+    return _supabase_client()
 
 
 def _to_text(msg: object) -> str:
-    """Normalize any object (exceptions, responses) to a human string."""
-    if isinstance(msg, str):
-        return msg
-    # common shapes
-    if isinstance(msg, dict):
-        for k in ("message", "error_description", "error", "msg", "detail", "hint"):
-            if k in msg:
-                return str(msg[k])
-        return str(msg)
-    # gotrue exceptions often expose .message
-    m = getattr(msg, "message", None)
-    if isinstance(m, str):
-        return m
-    return str(msg)
+    """Normaliza cualquier excepción/objeto a string legible."""
+    return getattr(msg, "message", None) or str(msg)
 
 
 # ----------------------------
-# Public API
+# Auth API
 # ----------------------------
-
-def signup(email: str, password: str, username: str) -> tuple[bool, str]:
+def signup(email: str, password: str, username: str) -> Tuple[bool, str]:
+    """
+    Crea un usuario con el payload soportado por supabase-py v2:
+      sb.auth.sign_up({
+        "email": ...,
+        "password": ...,
+        "options": {"data": {...}}
+      })
+    El trigger en la DB leerá user_metadata.data.username para poblar public.profiles.
+    """
     sb = get_supabase()
 
     email = (email or "").strip().lower()
     username = (username or "").strip()
-    password = (password or "").strip()   # 🔴 añadido
+    password = (password or "").strip()
 
     if not email or not password or not username:
         return False, "Email, password and username are required."
     if len(password) < 8:
         return False, "Password must be at least 8 characters."
 
-    payload = {
-        "email": email,
-        "password": password,
-        "data": {"username": username},
-    }
-
     try:
-        sb.auth.sign_up(payload)
+        sb.auth.sign_up(
+            {
+                "email": email,
+                "password": password,
+                "options": {
+                    "data": {"username": username}
+                },
+            }
+        )
         return True, "Check your inbox to confirm your email."
+    except (AuthApiError, AuthRetryableError) as e:
+        return False, _to_text(e)
     except Exception as e:
         return False, str(e)
 
 
-
-def login(email: str, password: str) -> tuple[bool, str]:
+def login(email: str, password: str) -> Tuple[bool, str]:
+    """
+    Login por contraseña (GoTrue v2).
+    """
     sb = get_supabase()
     email = (email or "").strip().lower()
+    password = (password or "").strip()
+
     try:
         sb.auth.sign_in_with_password({"email": email, "password": password})
         return True, "Signed in successfully."
-    except AuthRetryableError as e:
-        return False, _to_text(e)
     except AuthApiError as e:
-        return False, _to_text(e)
-
-    except AuthApiError as e:
-        # Mensajes comunes de GoTrue:
-        # - "Invalid login credentials"
-        # - "Email not confirmed"
-        # - "User not found"
-        msg = getattr(e, "message", None) or str(e)
-        # Ayuda contextual
+        # Mensajes habituales: "Invalid login credentials", "Email not confirmed"
+        msg = _to_text(e)
         if "Invalid login credentials" in msg:
-            return False, "Invalid login credentials. Tip: check for leading/trailing spaces or reset your password."
+            return False, "Invalid login credentials."
         if "Email not confirmed" in msg:
-            return False, "Email not confirmed. Please confirm your email before signing in."
+            return False, "Email not confirmed. Please confirm your email."
         return False, msg
     except AuthRetryableError as e:
-        return False, str(e)
+        return False, _to_text(e)
     except Exception as e:
-        # Por si algo ajeno a Auth (red, httpx, etc.)
-        return False, f"Unexpected error: {e}"
-
+        return False, str(e)
 
 
 def logout() -> Tuple[bool, str]:
-    """Sign out current session. Returns (ok, message)."""
-    sb = _get_supabase()
+    """Cierra la sesión actual."""
+    sb = get_supabase()
     try:
         sb.auth.sign_out()
-        return True, _to_text("Signed out.")
-    except AuthRetryableError as e:
+        return True, "Signed out."
+    except (AuthApiError, AuthRetryableError) as e:
         return False, _to_text(e)
-    except AuthApiError as e:
-        return False, _to_text(e)
+    except Exception as e:
+        return False, str(e)
 
 
 def current_user_id() -> Optional[str]:
-    """Return current user id (or None if no active session)."""
-    sb = _get_supabase()
+    """Devuelve el id del usuario actual o None si no hay sesión."""
+    sb = get_supabase()
     try:
         u = sb.auth.get_user()
         user = getattr(u, "user", None)
         return getattr(user, "id", None)
     except Exception:
-        # If there is no session or token, the SDK may throw; we just return None.
         return None
