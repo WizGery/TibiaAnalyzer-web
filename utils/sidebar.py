@@ -61,18 +61,18 @@ def render_global_sidebar():
             help="Imports the backup and replaces ALL current data. Use with caution.",
         )
         if bk is not None and st.button("Import backup", key="sb_btn_import"):
+            do_rerun = False
             try:
-                # 1) Vacía el store y hashes para que el import sea reemplazo total
-                save_store([])   # sin processed ni pending
-                clear_hashes()   # limpia memoria de dedupe
-
-                # 2) Importa el backup (reemplazo total tras vaciar)
+                save_store([])
+                clear_hashes()
                 import_backup_replace_processed(bk.read())
-
                 st.success("Backup imported. All previous data was replaced.")
-                st.rerun()
+                do_rerun = True
             except Exception as e:
                 st.error(f"Import failed: {e}")
+
+            if do_rerun:
+                st.rerun()
 
     # (sin st.markdown('---') aquí; así no aparece una segunda línea)
 
