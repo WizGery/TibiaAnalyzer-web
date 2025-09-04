@@ -59,15 +59,11 @@ def _to_text(msg: object) -> str:
 # ----------------------------
 
 def signup(email: str, password: str, username: str) -> tuple[bool, str]:
-    """
-    Alta con password. En esta build de supabase/auth en la nube,
-    el payload válido para que se guarde la contraseña es con 'data'
-    en la raíz (NO usar options.data).
-    """
     sb = get_supabase()
 
     email = (email or "").strip().lower()
     username = (username or "").strip()
+    password = (password or "").strip()   # 🔴 añadido
 
     if not email or not password or not username:
         return False, "Email, password and username are required."
@@ -77,17 +73,15 @@ def signup(email: str, password: str, username: str) -> tuple[bool, str]:
     payload = {
         "email": email,
         "password": password,
-        # 🔴 IMPORTANTE: metadata aquí en 'data' (no en options.data)
         "data": {"username": username},
     }
 
     try:
         sb.auth.sign_up(payload)
         return True, "Check your inbox to confirm your email."
-    except AuthRetryableError as e:
-        return False, _to_text(e)
-    except AuthApiError as e:
-        return False, _to_text(e)
+    except Exception as e:
+        return False, str(e)
+
 
 
 def login(email: str, password: str) -> tuple[bool, str]:
