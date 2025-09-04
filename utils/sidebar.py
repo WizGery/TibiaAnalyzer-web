@@ -6,9 +6,10 @@ import streamlit as st
 
 from ta_core.repository import (
     ensure_data_dirs, load_store, save_store,
-    export_backup_bytes, import_backup_replace_processed,
-    clear_hashes,
+    export_backup_bytes, clear_hashes,
 )
+# Importar la lógica de importación de backups desde el servicio (sin ciclos)
+from ta_core.services.backup import import_backup_replace_processed
 from ta_core.normalizer import normalize_records
 
 

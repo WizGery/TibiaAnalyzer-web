@@ -1,10 +1,8 @@
+# ta_core/repository.py
 import json
 import os
 import hashlib
 from typing import List, Dict, Tuple
-
-from .normalizer import normalize_records  # para separar processed/pending al importar
-
 
 # -----------------------
 # Rutas de datos
@@ -168,66 +166,3 @@ def export_backup_bytes() -> Tuple[bytes, str]:
     }
     data = json.dumps(obj, ensure_ascii=False, indent=2).encode("utf-8")
     return data, "tibia_analyzer_backup.json"
-
-
-def _key_from_item(d: Dict) -> Tuple[str, str, int]:
-    """Clave estable para identificar una hunt en store/dfs."""
-    o_start = str(d.get("Session start", d.get("session_start", "")))
-    o_end   = str(d.get("Session end",   d.get("session_end", "")))
-    xp_raw  = str(d.get("XP Gain", d.get("xp_gain", 0))).replace(",", "")
-    try:
-        xp = int(xp_raw)
-    except Exception:
-        xp = 0
-    return (o_start, o_end, xp)
-
-
-def import_backup_replace_processed(backup_bytes: bytes) -> None:
-    """
-    Importa un backup JSON (formato export_backup_bytes) y:
-      - Reemplaza SOLO los registros PROCESADOS actuales por los PROCESADOS del backup.
-      - Mantiene los PENDIENTES actuales tal cual.
-      - Sustituye hashes por los del backup (si están).
-    """
-    ensure_data_dirs()
-    obj = json.loads(backup_bytes.decode("utf-8"))
-    if not isinstance(obj, dict) or "store" not in obj:
-        raise ValueError("Invalid backup: expected an object with 'store'.")
-
-    backup_store: List[Dict] = obj.get("store", [])
-    backup_hashes: List[str] = obj.get("hashes", [])
-
-    # Actual
-    current_store = load_store()
-    cur_norm, cur_pending = normalize_records(current_store)
-    pending_keys = set((_key_from_item(r) for _, r in cur_pending.iterrows())) if not cur_pending.empty else set()
-
-    # Del backup, tomamos SOLO procesados
-    b_norm, _ = normalize_records(backup_store)
-    backup_processed: List[Dict] = []
-    if not b_norm.empty:
-        # reconstruimos items originales del backup por clave
-        backup_by_key: Dict[Tuple[str, str, int], Dict] = {}
-        for _, row in b_norm.iterrows():
-            src = row.get("source_raw") if isinstance(row.get("source_raw"), dict) else None
-            if src is not None:
-                backup_by_key[_key_from_item(src)] = src
-        # fallback si no había source_raw
-        if not backup_by_key:
-            for it in backup_store:
-                backup_by_key[_key_from_item(it)] = it
-        backup_processed = list(backup_by_key.values())
-
-    # Componemos nuevo store: pendientes actuales + procesados del backup
-    new_store: List[Dict] = []
-    # añade pendientes actuales
-    for it in current_store:
-        if _key_from_item(it) in pending_keys:
-            new_store.append(it)
-    # añade procesados del backup
-    new_store.extend(backup_processed)
-
-    save_store(new_store)
-    # Reemplaza hashes por los del backup (si vienen)
-    if isinstance(backup_hashes, list):
-        save_hashes(backup_hashes)
