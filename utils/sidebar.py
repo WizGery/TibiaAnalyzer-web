@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Dict, Tuple, List
 import pandas as pd
 import streamlit as st
+import json
 
 from ta_core.repository import (
     ensure_data_dirs, load_store, save_store,
@@ -63,14 +64,15 @@ def render_global_sidebar():
         if bk is not None and st.button("Import backup", key="sb_btn_import"):
             do_rerun = False
             try:
-                save_store([])
-                clear_hashes()
-                import_backup_replace_processed(bk.read())
+                save_store([])  # vacía store
+                clear_hashes()  # limpia hashes
+                import_backup_replace_processed(bk.read())  # hace el trabajo
                 st.success("Backup imported. All previous data was replaced.")
                 do_rerun = True
-            except Exception as e:
+            except (ValueError, OSError, json.JSONDecodeError) as e:
+                # Errores esperables del import/IO/JSON. NO capturamos todo Exception.
                 st.error(f"Import failed: {e}")
-
+            # <-- fuera del try/except: no se captura la excepción de rerun
             if do_rerun:
                 st.rerun()
 
