@@ -59,35 +59,48 @@ def _to_text(msg: object) -> str:
 # ----------------------------
 
 def signup(email: str, password: str, username: str) -> tuple[bool, str]:
+    """
+    Alta con password. En esta build de supabase/auth en la nube,
+    el payload válido para que se guarde la contraseña es con 'data'
+    en la raíz (NO usar options.data).
+    """
+    sb = get_supabase()
+
     email = (email or "").strip().lower()
     username = (username or "").strip()
-    sb = get_supabase()
-    payload_new = {
+
+    if not email or not password or not username:
+        return False, "Email, password and username are required."
+    if len(password) < 8:
+        return False, "Password must be at least 8 characters."
+
+    payload = {
         "email": email,
         "password": password,
-        "options": {"data": {"username": username}},
-    }
-    payload_old = {
-        "email": email,
-        "password": password,
+        # 🔴 IMPORTANTE: metadata aquí en 'data' (no en options.data)
         "data": {"username": username},
     }
+
     try:
-        try:
-            sb.auth.sign_up(payload_new)
-        except TypeError:
-            sb.auth.sign_up(payload_old)
+        sb.auth.sign_up(payload)
         return True, "Check your inbox to confirm your email."
-    except (AuthApiError, AuthRetryableError) as e:
-        return False, getattr(e, "message", None) or str(e)
+    except AuthRetryableError as e:
+        return False, _to_text(e)
+    except AuthApiError as e:
+        return False, _to_text(e)
 
 
 def login(email: str, password: str) -> tuple[bool, str]:
-    email = (email or "").strip().lower()
     sb = get_supabase()
+    email = (email or "").strip().lower()
     try:
         sb.auth.sign_in_with_password({"email": email, "password": password})
-        return True, _to_text("Signed in successfully.")
+        return True, "Signed in successfully."
+    except AuthRetryableError as e:
+        return False, _to_text(e)
+    except AuthApiError as e:
+        return False, _to_text(e)
+
     except AuthApiError as e:
         # Mensajes comunes de GoTrue:
         # - "Invalid login credentials"
