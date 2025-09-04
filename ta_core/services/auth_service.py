@@ -28,8 +28,8 @@ def _get_env(key: str) -> str:
 @st.cache_resource(show_spinner=False)
 def _get_supabase() -> Client:
     """Internal cached client."""
-    url = st.secrets("SUPABASE_URL")
-    key = st.secrets("SUPABASE_ANON_KEY")
+    url = st.secrets["SUPABASE_URL"]
+    key = st.secrets["SUPABASE_ANON_KEY"]
     return create_client(url, key)
 
 # Backwards-compat for auth_repo
