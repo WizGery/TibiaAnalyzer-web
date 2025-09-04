@@ -59,55 +59,55 @@ def _to_text(msg: object) -> str:
 # ----------------------------
 
 def signup(email: str, password: str, username: str) -> tuple[bool, str]:
-    """
-    Create a new user passing `username` as user metadata so the DB trigger
-    can insert into public.profiles without violating constraints.
-    Tries both payload shapes (options.data vs data) to be compatible with
-    different supabase-py/gotrue versions.
-    """
-    sb = _get_supabase()
-    # payload con options.data (formato nuevo)
+    email = (email or "").strip()
+    username = (username or "").strip()
+    sb = get_supabase()
     payload_new = {
         "email": email,
         "password": password,
-        "options": {
-            "data": {"username": username}
-        },
+        "options": {"data": {"username": username}},
     }
-    # payload con data plano (formato anterior)
     payload_old = {
         "email": email,
         "password": password,
         "data": {"username": username},
     }
-
     try:
-        # 1) Intenta formato nuevo
         try:
             sb.auth.sign_up(payload_new)
         except TypeError:
-            # Algunas versiones lanzan TypeError si no reconocen "options"
             sb.auth.sign_up(payload_old)
-
         return True, "Check your inbox to confirm your email."
     except (AuthApiError, AuthRetryableError) as e:
-        # Devuelve el motivo legible de gotrue/postgrest
-        msg = getattr(e, "message", None) or str(e)
-        return False, f"Signup failed: {msg}"
+        return False, getattr(e, "message", None) or str(e)
 
 
-
-def login(email: str, password: str) -> Tuple[bool, str]:
+def login(email: str, password: str) -> tuple[bool, str]:
     """Password login. Returns (ok, message)."""
-    sb = _get_supabase()
+    sb = get_supabase()  # tu función que devuelve el cliente cacheado
+    email = (email or "").strip()  # evitar espacios
     try:
+        # Supabase espera un diccionario con email/password
         sb.auth.sign_in_with_password({"email": email, "password": password})
-        return True, _to_text("Signed in successfully.")
-    except AuthRetryableError as e:
-        return False, _to_text(e)
+        return True, "Signed in successfully."
     except AuthApiError as e:
-        # Typical: invalid credentials, user not found, email not confirmed, etc.
-        return False, _to_text(e)
+        # Mensajes comunes de GoTrue:
+        # - "Invalid login credentials"
+        # - "Email not confirmed"
+        # - "User not found"
+        msg = getattr(e, "message", None) or str(e)
+        # Ayuda contextual
+        if "Invalid login credentials" in msg:
+            return False, "Invalid login credentials. Tip: check for leading/trailing spaces or reset your password."
+        if "Email not confirmed" in msg:
+            return False, "Email not confirmed. Please confirm your email before signing in."
+        return False, msg
+    except AuthRetryableError as e:
+        return False, str(e)
+    except Exception as e:
+        # Por si algo ajeno a Auth (red, httpx, etc.)
+        return False, f"Unexpected error: {e}"
+
 
 
 def logout() -> Tuple[bool, str]:

@@ -19,6 +19,7 @@ pages = [
     st.Page("app_pages/0_Login.py",            title="Account",       icon="🔐"),
     st.Page("app_pages/1_Zone_Averages.py",    title="Zone Averages", icon="📊"),
     st.Page("app_pages/4_Statistics.py",       title="Statistics",    icon="📈"),
+    st.Page("app_pages/_debug_auth.py",       title="debug",    icon="📈"),
 ]
 
 if is_logged_in():
