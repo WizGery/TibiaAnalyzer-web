@@ -10,7 +10,7 @@ from ta_core.normalizer import normalize_records
 from ta_core.aggregator import aggregate_by_zone, compute_monsters_kph_for_df
 from ta_core.export import df_to_csv_bytes
 
-from utils.tibiawiki import get_monster_icon_pair  # usamos par (data_uri, src_url)
+from utils.tibiawiki import get_monster_icon_data_uri  # usamos data URI (backend)
 
 # ---------- helpers ----------
 def fmt_int(val):
@@ -354,7 +354,11 @@ else:
                     if req is not None and kph > 0:
                         eta_h = float(req) / float(kph)
 
-                    data_uri, src_url = get_monster_icon_pair(monster)
+                    data_uri_pack = get_monster_icon_data_uri(monster)
+                    if data_uri_pack:
+                        data_uri, src_url = data_uri_pack
+                    else:
+                        data_uri, src_url = None, None
 
                     rows_eta.append({
                         "data_uri": data_uri,
