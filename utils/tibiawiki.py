@@ -9,8 +9,14 @@ import streamlit as st
 WIKI_BASE = "https://tibia.fandom.com/wiki/"
 
 def _normalize_wiki_title(name: str) -> str:
-    name = re.sub(r"\s+", " ", str(name or "").strip())
-    words = [w.capitalize() for w in name.split(" ")]
+    s = re.sub(r"\s+", " ", str(name or "").strip())
+
+    def cap_hyphenated(token: str) -> str:
+        parts = token.split("-")
+        parts = [p[:1].upper() + p[1:].lower() if p else "" for p in parts]
+        return "-".join(parts)
+
+    words = [cap_hyphenated(w) for w in s.split(" ")]
     return "_".join(words)
 
 def get_monster_icon_url(monster_name: str) -> Optional[str]:
