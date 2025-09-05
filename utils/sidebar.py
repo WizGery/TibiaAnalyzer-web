@@ -207,7 +207,6 @@ def render_sidebar() -> None:
         return
 
     # margen suave, sin divider extra para no crear líneas duplicadas
-    st.sidebar.write("")
     _exp_backup()
-    st.sidebar.write("")
     _exp_danger_zone()
+

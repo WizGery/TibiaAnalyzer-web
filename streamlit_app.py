@@ -29,8 +29,8 @@ if is_logged_in():
     ])
 
 if is_admin():
-    pages.append(st.Page("app_pages/9_Admin.py", title="Admin", icon="🛡️")),
-    pages.append(st.Page("app_pages/8_Debug.py", title="Debug", icon="🛠️")),
+    pages.append(st.Page("app_pages/9_Admin.py", title="Admin", icon="🛡️"))
+    pages.append(st.Page("app_pages/8_Debug.py", title="Debug", icon="🛠️"))
 
 nav = st.navigation(pages)
 
