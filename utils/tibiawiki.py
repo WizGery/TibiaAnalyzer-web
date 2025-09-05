@@ -1,34 +1,43 @@
 # utils/tibiawiki.py
 from __future__ import annotations
 
+# Standard lib
+import base64
 import re
 from typing import Optional
 from urllib.parse import quote
 
+# Third-party
 import requests
 import streamlit as st
 
+
 WIKI_BASE = "https://tibia.fandom.com/wiki/"
+HTTP_TIMEOUT = 12
+HTTP_HEADERS = {
+    # Algunos hostings bloquean requests sin UA
+    "User-Agent": "TibiaAnalyzer/1.0 (+https://github.com/WizGery/TibiaAnalyzer-web)"
+}
+
 
 def _normalize_wiki_title(name: str) -> str:
     """
-    Convierte nombres a título de página de TibiaWiki:
+    Convierte un nombre de monstruo al título de página de TibiaWiki:
     - Reduce espacios múltiples a uno
     - Mantiene los guiones '-'
     - Reemplaza espacios por '_'
     - Capitaliza cada palabra y cada segmento separado por '-'
+
     Ejemplos:
       "frost flower asura" -> "Frost_Flower_Asura"
       "Two-Headed Turtle"  -> "Two-Headed_Turtle"
       "two-headed turtle"  -> "Two-Headed_Turtle"
     """
     raw = str(name or "").strip()
-    # normaliza underscores a espacios
     raw = raw.replace("_", " ")
     raw = re.sub(r"\s+", " ", raw)
 
     def cap_token(tok: str) -> str:
-        # Capitaliza cada parte separada por '-': two-headed -> Two-Headed
         parts = tok.split("-")
         parts = [p[:1].upper() + p[1:].lower() if p else p for p in parts]
         return "-".join(parts)
@@ -36,24 +45,58 @@ def _normalize_wiki_title(name: str) -> str:
     tokens = [cap_token(t) for t in raw.split(" ")]
     return "_".join(tokens)
 
+
+def _build_page_url(monster_name: str) -> str:
+    title = _normalize_wiki_title(monster_name)
+    # No codificar '-' ni '_' en la URL final
+    return f"{WIKI_BASE}{quote(title, safe='-_')}"
+
+
+@st.cache_data(show_spinner=False, ttl=60 * 60)
 def get_monster_icon_url(monster_name: str) -> Optional[str]:
     """
     Devuelve la URL absoluta del GIF del monstruo en TibiaWiki (si se encuentra).
+    Cacheada para reducir peticiones.
     """
-    title = _normalize_wiki_title(monster_name)
-    page_url = f"{WIKI_BASE}{quote(title, safe='-_')}"  # conservar "-" y "_"
+    page_url = _build_page_url(monster_name)
 
     try:
-        resp = requests.get(page_url, timeout=10)
-        if resp.status_code != 200:
+        resp = requests.get(page_url, headers=HTTP_HEADERS, timeout=HTTP_TIMEOUT)
+        if resp.status_code != 200 or not resp.text:
             return None
 
-        # Buscar el primer gif de monstruo en la página (usualmente en infobox)
-        match = re.search(r'<img[^>]+src="([^"]+?\.gif)"', resp.text, re.IGNORECASE)
-        if match:
-            return match.group(1)
-    except requests.RequestException as e:
-        st.error(f"Failed to fetch monster icon for {monster_name}: {e}")
+        # Heurística: primer .gif del infobox suele ser el icono.
+        # Evitamos .svg y otros formatos.
+        m = re.search(r'<img[^>]+src="([^"]+?\.gif)"', resp.text, re.IGNORECASE)
+        if m:
+            # La URL puede venir con // o relativa; normalizamos a https://
+            src = m.group(1)
+            if src.startswith("//"):
+                return "https:" + src
+            if src.startswith("/"):
+                return "https://tibia.fandom.com" + src
+            return src
         return None
 
-    return None
+    except requests.RequestException:
+        return None
+
+
+@st.cache_data(show_spinner=False, ttl=60 * 60)
+def get_monster_icon_data_uri(monster_name: str) -> Optional[str]:
+    """
+    Descarga el GIF del monstruo y devuelve un Data URI (base64) listo para <img src="...">.
+    Cacheada para evitar repetir descargas.
+    """
+    img_url = get_monster_icon_url(monster_name)
+    if not img_url:
+        return None
+
+    try:
+        r = requests.get(img_url, headers=HTTP_HEADERS, timeout=HTTP_TIMEOUT)
+        if r.status_code != 200 or not r.content:
+            return None
+        b64 = base64.b64encode(r.content).decode("ascii")
+        return f"data:image/gif;base64,{b64}"
+    except requests.RequestException:
+        return None
