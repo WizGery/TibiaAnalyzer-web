@@ -4,7 +4,7 @@ from __future__ import annotations
 # Standard lib
 import base64
 import re
-from typing import Optional
+from typing import Optional, Tuple
 from urllib.parse import quote
 
 # Third-party
@@ -66,10 +66,8 @@ def get_monster_icon_url(monster_name: str) -> Optional[str]:
             return None
 
         # Heurística: primer .gif del infobox suele ser el icono.
-        # Evitamos .svg y otros formatos.
         m = re.search(r'<img[^>]+src="([^"]+?\.gif)"', resp.text, re.IGNORECASE)
         if m:
-            # La URL puede venir con // o relativa; normalizamos a https://
             src = m.group(1)
             if src.startswith("//"):
                 return "https:" + src
@@ -100,3 +98,15 @@ def get_monster_icon_data_uri(monster_name: str) -> Optional[str]:
         return f"data:image/gif;base64,{b64}"
     except requests.RequestException:
         return None
+
+
+def get_monster_icon_pair(monster_name: str) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Devuelve (data_uri, src_url) para el icono del monstruo.
+    Útil si quieres desempaquetar directamente.
+    """
+    src_url = get_monster_icon_url(monster_name)
+    if not src_url:
+        return None, None
+    data_uri = get_monster_icon_data_uri(monster_name)
+    return data_uri, src_url

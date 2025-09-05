@@ -10,7 +10,7 @@ from ta_core.normalizer import normalize_records
 from ta_core.aggregator import aggregate_by_zone, compute_monsters_kph_for_df
 from ta_core.export import df_to_csv_bytes
 
-from utils.tibiawiki import get_monster_icon_data_uri  # usamos data URI (backend)
+from utils.tibiawiki import get_monster_icon_pair
 
 # ---------- helpers ----------
 def fmt_int(val):
