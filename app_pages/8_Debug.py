@@ -1,11 +1,11 @@
 # app_pages/8_Debug.py
 from __future__ import annotations
-import os
 import streamlit as st
 from ta_core.services.auth_service import get_supabase, login, signup, logout, current_user_id
-from utils.debug_console import get_log_text, clear_log, set_debug_enabled, debug_enabled, dbg
+from utils.debug_console import get_log_text, clear_log, set_debug_enabled, debug_enabled
 
-st.set_page_config(page_title="Debug", page_icon="🛠️", layout="wide")
+# ❌ NO st.set_page_config aquí
+st.title("Debug console")
 
 # Solo admins (si quieres quitar la barrera, comenta este bloque)
 try:
