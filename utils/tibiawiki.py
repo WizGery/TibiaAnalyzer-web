@@ -1,86 +1,59 @@
 # utils/tibiawiki.py
 from __future__ import annotations
-import re, base64
+
+import re
+from typing import Optional
 from urllib.parse import quote
-from typing import Optional, Tuple
+
 import requests
 import streamlit as st
 
 WIKI_BASE = "https://tibia.fandom.com/wiki/"
 
 def _normalize_wiki_title(name: str) -> str:
-    name = re.sub(r"\s+", " ", str(name or "").strip())
-    words = [w.capitalize() for w in name.split(" ")]
-    return "_".join(words)
+    """
+    Convierte nombres a título de página de TibiaWiki:
+    - Reduce espacios múltiples a uno
+    - Mantiene los guiones '-'
+    - Reemplaza espacios por '_'
+    - Capitaliza cada palabra y cada segmento separado por '-'
+    Ejemplos:
+      "frost flower asura" -> "Frost_Flower_Asura"
+      "Two-Headed Turtle"  -> "Two-Headed_Turtle"
+      "two-headed turtle"  -> "Two-Headed_Turtle"
+    """
+    raw = str(name or "").strip()
+    # normaliza underscores a espacios
+    raw = raw.replace("_", " ")
+    raw = re.sub(r"\s+", " ", raw)
+
+    def cap_token(tok: str) -> str:
+        # Capitaliza cada parte separada por '-': two-headed -> Two-Headed
+        parts = tok.split("-")
+        parts = [p[:1].upper() + p[1:].lower() if p else p for p in parts]
+        return "-".join(parts)
+
+    tokens = [cap_token(t) for t in raw.split(" ")]
+    return "_".join(tokens)
 
 def get_monster_icon_url(monster_name: str) -> Optional[str]:
-    """Conserva esta si ya la usas en otros sitios."""
-    if not monster_name:
-        return None
+    """
+    Devuelve la URL absoluta del GIF del monstruo en TibiaWiki (si se encuentra).
+    """
     title = _normalize_wiki_title(monster_name)
-    headers = {"User-Agent": "Mozilla/5.0 (compatible; TibiaAnalyzer/1.0; +streamlit)"}
+    page_url = f"{WIKI_BASE}{quote(title, safe='-_')}"  # conservar "-" y "_"
 
-    # 1) Special:FilePath (gif/png)
-    for ext in (".gif", ".png"):
-        try:
-            file_url = f"{WIKI_BASE}Special:FilePath/{quote(title + ext, safe=':/_')}"
-            r = requests.get(file_url, headers=headers, timeout=10, allow_redirects=True)
-            if r.status_code == 200 and r.url and r.url.startswith("http"):
-                return r.url
-        except Exception:
-            pass
-
-    # 2) Fallback: og:image / thumbnail
     try:
-        page_url = f"{WIKI_BASE}{quote(title, safe=':/_')}"
-        r = requests.get(page_url, headers=headers, timeout=10, allow_redirects=True)
-        if r.status_code != 200 or not r.text:
+        resp = requests.get(page_url, timeout=10)
+        if resp.status_code != 200:
             return None
-        html = r.text
-        m = re.search(r'<meta\s+property=["\']og:image["\']\s+content=["\']([^"\']+)["\']', html, re.IGNORECASE)
-        if m:
-            og = m.group(1)
-            return ("https:" + og) if og.startswith("//") else og
-        m2 = re.search(r'<img[^>]+class=["\'][^"\']*pi-image-thumbnail[^"\']*["\'][^>]+src=["\']([^"\']+)["\']',
-                       html, re.IGNORECASE)
-        if m2:
-            src = m2.group(1)
-            return ("https:" + src) if src.startswith("//") else src
-    except Exception:
+
+        # Buscar el primer gif de monstruo en la página (usualmente en infobox)
+        match = re.search(r'<img[^>]+src="([^"]+?\.gif)"', resp.text, re.IGNORECASE)
+        if match:
+            return match.group(1)
+    except requests.RequestException as e:
+        st.error(f"Failed to fetch monster icon for {monster_name}: {e}")
         return None
+
     return None
-
-@st.cache_data(ttl=60*60*24, show_spinner=False)
-def get_monster_icon_bytes(monster_name: str) -> Optional[Tuple[bytes, str, str]]:
-    """
-    Descarga la imagen del monstruo.
-    Devuelve (bytes, mime, final_url) o None si falla.
-    """
-    url = get_monster_icon_url(monster_name)
-    if not url:
-        return None
-    # Enviar Referer hacia la wiki mejora compatibilidad con el CDN
-    title = _normalize_wiki_title(monster_name)
-    headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; TibiaAnalyzer/1.0; +streamlit)",
-        "Referer": f"{WIKI_BASE}{title}",
-    }
-    try:
-        r = requests.get(url, headers=headers, timeout=15, allow_redirects=True)
-        if r.status_code != 200:
-            return None
-        mime = r.headers.get("Content-Type", "image/gif")
-        return (r.content, mime.split(";")[0], r.url)
-    except Exception:
-        return None
-
-def get_monster_icon_data_uri(monster_name: str) -> Optional[Tuple[str, str]]:
-    """
-    Devuelve (data_uri, source_url) para usar en <img src="...">.
-    """
-    res = get_monster_icon_bytes(monster_name)
-    if not res:
-        return None
-    data, mime, src_url = res
-    b64 = base64.b64encode(data).decode("ascii")
-    return (f"data:{mime};base64,{b64}", src_url)
