@@ -47,21 +47,18 @@ with st.expander("Sign up (test)", expanded=True):
     su_pass  = st.text_input("Password", type="password", key="dbg_su_pass")
     if st.button("Create account (sign up)"):
         ok, msg = signup(su_email, su_pass, su_user)
-        text = (msg or "").strip()
-        (st.success if ok else st.error)(text if text else ("OK" if ok else "Error"))
+        (st.success if ok else st.error)(msg)
 
 with st.expander("Login (test)", expanded=True):
     li_email = st.text_input("Email", key="dbg_li_email")
     li_pass  = st.text_input("Password", type="password", key="dbg_li_pass")
     if st.button("Login now"):
         ok, msg = login(li_email, li_pass)
-        text = (msg or "").strip()
-        (st.success if ok else st.error)(text if text else ("OK" if ok else "Error"))
+        (st.success if ok else st.error)(msg)
 
 if st.button("Logout"):
     ok, msg = logout()
-    text = (msg or "").strip()
-    (st.success if ok else st.error)(text if text else ("OK" if ok else "Error"))
+    (st.success if ok else st.error)(msg)
 
 st.divider()
 

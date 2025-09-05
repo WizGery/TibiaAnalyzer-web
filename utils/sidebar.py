@@ -209,4 +209,3 @@ def render_sidebar() -> None:
     # margen suave, sin divider extra para no crear líneas duplicadas
     _exp_backup()
     _exp_danger_zone()
-
