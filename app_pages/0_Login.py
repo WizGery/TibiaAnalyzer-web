@@ -1,3 +1,4 @@
+# app_pages/0_Login.py
 from __future__ import annotations
 import re
 import streamlit as st
@@ -16,8 +17,9 @@ def _login_tab() -> None:
     col_form, _ = form_cols("sm")
     with col_form:
         with st.form("login_form", clear_on_submit=False):
+            # Igual que en Debug: email normalizado, password SIN strip()
             email = st.text_input("Email", key="login_email").strip().lower()
-            password = st.text_input("Password", type="password", key="login_pwd")  # sin strip()
+            password = st.text_input("Password", type="password", key="login_pwd")
             submitted = st.form_submit_button("Login")
 
         if submitted:
@@ -25,7 +27,7 @@ def _login_tab() -> None:
             text = msg if isinstance(msg, str) else str(msg)
             if ok:
                 st.success("Signed in successfully.")
-                # Redirige automáticamente a "Profile"
+                # Redirige automáticamente al perfil
                 st.session_state["_just_logged_in"] = True
                 st.rerun()
             else:
@@ -81,7 +83,7 @@ def _signup_tab() -> None:
         elif cu is False:
             st.error("Username taken")
 
-    # Passwords
+    # Passwords (como en Debug: no hacemos strip())
     su_pass1 = st.text_input("Password", type="password", key="su_pass1")
     su_pass2 = st.text_input("Confirm password", type="password", key="su_pass2")
 
@@ -97,8 +99,8 @@ def _signup_tab() -> None:
             st.error("Invalid username format.")
             return
 
-        # Orden original de la UI: (email, username, password)
-        ok, msg = signup(su_email, su_username, su_pass1)
+        # ⚠️ Orden CORRECTO como en 8_Debug.py: (email, password, username)
+        ok, msg = signup(su_email.strip().lower(), su_pass1, su_username.strip())
         text = msg if isinstance(msg, str) else str(msg)
         if ok:
             st.success("Account created. Please check your email if confirmation is required.")
