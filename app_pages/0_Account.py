@@ -6,7 +6,7 @@ import streamlit as st
 from ta_core.services.characters_service import refresh_owned_characters, remove_owned_character
 from ta_core.services.auth_service import signup, login, logout, current_user_id
 from ta_core.auth_repo import get_profile, is_username_available, is_email_available
-from utils.ui_layout import two_cols, form_cols, inject_base_css
+from utils.ui_layout import two_cols, form_cols, inject_base_css, single_col
 
 # Secciones ocultas (UI aislada)
 from app_pages.sections.add_character import render as render_add_character
@@ -90,8 +90,10 @@ def _signup_tab() -> None:
             st.error("Username taken")
 
     # Passwords
-    su_pass1 = st.text_input("Password", type="password", key="su_pass1")
-    su_pass2 = st.text_input("Confirm password", type="password", key="su_pass2")
+    col_p_input, col_p_confirm = two_cols("md")
+    with col_p_input:
+        su_pass1 = st.text_input("Password", type="password", key="su_pass1")
+        su_pass2 = st.text_input("Confirm password", type="password", key="su_pass2")
 
     if st.button("Create account", key="btn_signup"):
         if not su_email or not su_username or not su_pass1 or not su_pass2:
