@@ -154,7 +154,7 @@ def _profile_tab() -> None:
         return
 
     prof = get_profile(uid) or {}
-    st.subheader("Profile")
+    st.subheader("")
 
     # Tres columnas de 1er nivel: acciones | detalles | characters
     col_actions, col_details, col_chars = st.columns([1, 1, 2], gap="large")
