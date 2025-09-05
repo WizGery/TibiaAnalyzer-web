@@ -19,8 +19,7 @@ pages = [
     st.Page("app_pages/0_Login.py",            title="Account",       icon="🔐"),
     st.Page("app_pages/1_Zone_Averages.py",    title="Zone Averages", icon="📊"),
     st.Page("app_pages/4_Statistics.py",       title="Statistics",    icon="📈"),
-    st.Page("app_pages/_debug_auth.py",        title="debug",         icon="📈"),
-    st.Page("app_pages/8_Debug.py",            title="Debug",         icon="🛠️"),
+
 ]
 
 if is_logged_in():
@@ -30,7 +29,8 @@ if is_logged_in():
     ])
 
 if is_admin():
-    pages.append(st.Page("app_pages/9_Admin.py", title="Admin", icon="🛡️"))
+    pages.append(st.Page("app_pages/9_Admin.py", title="Admin", icon="🛡️")),
+    pages.append(st.Page("app_pages/8_Debug.py", title="Debug", icon="🛠️")),
 
 nav = st.navigation(pages)
 
