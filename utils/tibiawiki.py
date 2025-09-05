@@ -1,137 +1,86 @@
+# utils/tibiawiki.py
 from __future__ import annotations
-
-# Standard lib
-import base64
-import re
-from typing import Optional, Tuple
+import re, base64
 from urllib.parse import quote
-
-# Third-party
+from typing import Optional, Tuple
 import requests
 import streamlit as st
 
 WIKI_BASE = "https://tibia.fandom.com/wiki/"
-HTTP_TIMEOUT = 12
-HTTP_HEADERS = {
-    "User-Agent": "TibiaAnalyzer/1.0 (+https://github.com/WizGery/TibiaAnalyzer-web)"
-}
 
-# ---------- Helpers de título/URL ----------
+def _normalize_wiki_title(name: str) -> str:
+    name = re.sub(r"\s+", " ", str(name or "").strip())
+    words = [w.capitalize() for w in name.split(" ")]
+    return "_".join(words)
 
-def _title_from_name_original(name: str) -> str:
-    """
-    Lógica solicitada:
-      - Colapsa espacios múltiples
-      - Reemplaza espacios por '_'
-      - Conserva '-'
-      - No fuerza mayúsculas/minúsculas (usa el nombre tal cual venga)
-    """
-    raw = (name or "").strip()
-    raw = re.sub(r"\s+", " ", raw)
-    return raw.replace(" ", "_")
-
-def _build_page_url(monster_name: str) -> str:
-    title = _title_from_name_original(monster_name)
-    # No codificar '-' ni '_'
-    return f"{WIKI_BASE}{quote(title, safe='-_')}"
-
-def _monster_key_variants(monster_name: str) -> list[str]:
-    """
-    Genera variantes para comparar contra nombres de archivo .gif:
-    - Sin espacios/underscores
-    - Con/ sin guiones
-    - Case-insensitive (se usará en regex con IGNORECASE)
-    """
-    base = (monster_name or "").strip()
-    base = re.sub(r"\s+", " ", base)
-    v1 = base                      # "Two-Headed Turtle"
-    v2 = base.replace(" ", "_")    # "Two-Headed_Turtle"
-    v3 = base.replace("-", " ")    # "Two Headed Turtle"
-    v4 = v2.replace("-", "_")      # "Two_Headed_Turtle"
-    v5 = base.replace(" ", "")     # "Two-HeadedTurtle"
-    v6 = v5.replace("-", "")       # "TwoHeadedTurtle"
-    return [v1, v2, v3, v4, v5, v6]
-
-# ---------- Scraping principal ----------
-
-@st.cache_data(show_spinner=False, ttl=60 * 60)
 def get_monster_icon_url(monster_name: str) -> Optional[str]:
-    """
-    Devuelve la URL absoluta del GIF del monstruo en TibiaWiki (si se encuentra),
-    priorizando el GIF del infobox y evitando efectos tipo Flame_Effect.gif.
-    """
-    page_url = _build_page_url(monster_name)
+    """Conserva esta si ya la usas en otros sitios."""
+    if not monster_name:
+        return None
+    title = _normalize_wiki_title(monster_name)
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; TibiaAnalyzer/1.0; +streamlit)"}
+
+    # 1) Special:FilePath (gif/png)
+    for ext in (".gif", ".png"):
+        try:
+            file_url = f"{WIKI_BASE}Special:FilePath/{quote(title + ext, safe=':/_')}"
+            r = requests.get(file_url, headers=headers, timeout=10, allow_redirects=True)
+            if r.status_code == 200 and r.url and r.url.startswith("http"):
+                return r.url
+        except Exception:
+            pass
+
+    # 2) Fallback: og:image / thumbnail
     try:
-        resp = requests.get(page_url, headers=HTTP_HEADERS, timeout=HTTP_TIMEOUT)
-        if resp.status_code != 200 or not resp.text:
+        page_url = f"{WIKI_BASE}{quote(title, safe=':/_')}"
+        r = requests.get(page_url, headers=headers, timeout=10, allow_redirects=True)
+        if r.status_code != 200 or not r.text:
             return None
-        html = resp.text
-
-        # 1) Intento: <img ... class="pi-image-thumbnail" ... src="...gif">
-        m_infobox = re.search(
-            r'<img[^>]+class="[^"]*\bpi-image-thumbnail\b[^"]*"[^>]+src="([^"]+?\.gif[^"]*)"',
-            html, re.IGNORECASE
-        )
-        if m_infobox:
-            src = m_infobox.group(1)
-            if src.startswith("//"):
-                return "https:" + src
-            if src.startswith("/"):
-                return "https://tibia.fandom.com" + src
-            return src
-
-        # 2) Intento: enlace a File: cuyo nombre contenga el nombre del monstruo
-        #    Ej: <a href="/wiki/File:Hellspawn.gif" ...>
-        #    Evita coger Flame_Effect.gif, etc.
-        variants = _monster_key_variants(monster_name)
-        files = re.findall(r'href="/wiki/File:([^"]+?\.gif)"', html, re.IGNORECASE)
-        if files:
-            # Preferir exact/near match con el nombre del monstruo
-            for fname in files:
-                for key in variants:
-                    # Normalizamos comparando sin espacios/underscores y case-insensitive
-                    if re.search(re.escape(key).replace(r"\ ", r"[ _-]?"), fname, re.IGNORECASE):
-                        # Construye la URL de redirect directo al archivo del gif
-                        return f"https://tibia.fandom.com/wiki/Special:Redirect/file/{quote(fname)}"
-
-        # 3) Fallback último: el primer .gif encontrado (puede ser un efecto)
-        m_any = re.search(r'<img[^>]+src="([^"]+?\.gif[^"]*)"', html, re.IGNORECASE)
-        if m_any:
-            src = m_any.group(1)
-            if src.startswith("//"):
-                return "https:" + src
-            if src.startswith("/"):
-                return "https://tibia.fandom.com" + src
-            return src
-
+        html = r.text
+        m = re.search(r'<meta\s+property=["\']og:image["\']\s+content=["\']([^"\']+)["\']', html, re.IGNORECASE)
+        if m:
+            og = m.group(1)
+            return ("https:" + og) if og.startswith("//") else og
+        m2 = re.search(r'<img[^>]+class=["\'][^"\']*pi-image-thumbnail[^"\']*["\'][^>]+src=["\']([^"\']+)["\']',
+                       html, re.IGNORECASE)
+        if m2:
+            src = m2.group(1)
+            return ("https:" + src) if src.startswith("//") else src
+    except Exception:
         return None
+    return None
 
-    except requests.RequestException:
-        return None
-
-@st.cache_data(show_spinner=False, ttl=60 * 60)
-def get_monster_icon_data_uri(monster_name: str) -> Optional[str]:
+@st.cache_data(ttl=60*60*24, show_spinner=False)
+def get_monster_icon_bytes(monster_name: str) -> Optional[Tuple[bytes, str, str]]:
     """
-    Descarga el GIF y devuelve un Data URI (base64) listo para usar en <img src="...">.
+    Descarga la imagen del monstruo.
+    Devuelve (bytes, mime, final_url) o None si falla.
     """
-    img_url = get_monster_icon_url(monster_name)
-    if not img_url:
+    url = get_monster_icon_url(monster_name)
+    if not url:
         return None
+    # Enviar Referer hacia la wiki mejora compatibilidad con el CDN
+    title = _normalize_wiki_title(monster_name)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; TibiaAnalyzer/1.0; +streamlit)",
+        "Referer": f"{WIKI_BASE}{title}",
+    }
     try:
-        r = requests.get(img_url, headers=HTTP_HEADERS, timeout=HTTP_TIMEOUT)
-        if r.status_code != 200 or not r.content:
+        r = requests.get(url, headers=headers, timeout=15, allow_redirects=True)
+        if r.status_code != 200:
             return None
-        b64 = base64.b64encode(r.content).decode("ascii")
-        return f"data:image/gif;base64,{b64}"
-    except requests.RequestException:
+        mime = r.headers.get("Content-Type", "image/gif")
+        return (r.content, mime.split(";")[0], r.url)
+    except Exception:
         return None
 
-def get_monster_icon_pair(monster_name: str) -> Tuple[Optional[str], Optional[str]]:
+def get_monster_icon_data_uri(monster_name: str) -> Optional[Tuple[str, str]]:
     """
-    Devuelve (data_uri, src_url) del icono del monstruo.
+    Devuelve (data_uri, source_url) para usar en <img src="...">.
     """
-    src_url = get_monster_icon_url(monster_name)
-    if not src_url:
-        return None, None
-    data_uri = get_monster_icon_data_uri(monster_name)
-    return data_uri, src_url
+    res = get_monster_icon_bytes(monster_name)
+    if not res:
+        return None
+    data, mime, src_url = res
+    b64 = base64.b64encode(data).decode("ascii")
+    return (f"data:{mime};base64,{b64}", src_url)
