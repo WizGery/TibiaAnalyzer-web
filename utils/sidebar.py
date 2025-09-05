@@ -49,7 +49,7 @@ def _row_key_from_store_item(orig: Dict[str, Any]) -> Tuple[str, str, int]:
     xp_raw = str(orig.get("XP Gain", orig.get("xp_gain", 0))).replace(",", "")
     try:
         xp = int(float(xp_raw))
-    except Exception:
+    except ValueError:
         xp = 0
     return (s_start, s_end, xp)
 
@@ -82,25 +82,30 @@ def _exp_backup() -> None:
         # ---------- Import ----------
         st.caption("Import will REPLACE all current data.")
         uploader = st.file_uploader(
-            "📥 Import backup (.json)",
-            type=["json"],
+            "📥 Import backup (.zip)",
+            type=["zip"],
             accept_multiple_files=False,
             key="sb_import_backup",
             help="Imports the backup and replaces ALL current data. Use with caution.",
         )
 
         if uploader is not None and st.button("Import backup", key="sb_btn_import"):
-            do_rerun = False
+            imported_ok = False
             try:
                 raw_bytes = uploader.read()
-                # Reemplaza all y limpia hashes internamente
                 import_backup_replace_processed(raw_bytes)
-                st.success("Backup imported. All previous data was replaced.")
-                do_rerun = True
+                imported_ok = True
             except (ValueError, OSError, json.JSONDecodeError) as e:
                 st.error(f"Import failed: {e}")
 
-            if do_rerun:
+            if imported_ok:
+                # Invalida caches y estado derivado para que reaparezcan chars/tiendas/etc.
+                st.cache_data.clear()
+                for k in ("owned_chars", "account_view", "add_char_code", "add_char_exp"):
+                    if k in st.session_state:
+                        del st.session_state[k]
+                st.success("Backup imported. All previous data was replaced.")
+                # Rerun fuera de try/except — regla del proyecto
                 st.rerun()
 
 
@@ -127,7 +132,7 @@ def _exp_danger_zone() -> None:
                         str(r.get("session_end", "")),
                         int(r.get("xp_gain", 0)),
                     )
-                except Exception:
+                except ValueError:
                     key = (
                         str(r.get("session_start", "")),
                         str(r.get("session_end", "")),
@@ -144,7 +149,7 @@ def _exp_danger_zone() -> None:
                         str(r.get("session_end", "")),
                         int(r.get("xp_gain", 0)),
                     )
-                except Exception:
+                except ValueError:
                     key = (
                         str(r.get("session_start", "")),
                         str(r.get("session_end", "")),
@@ -206,6 +211,5 @@ def render_sidebar() -> None:
     if not (_is_logged_in() and _is_admin()):
         return
 
-    # margen suave, sin divider extra para no crear líneas duplicadas
     _exp_backup()
     _exp_danger_zone()

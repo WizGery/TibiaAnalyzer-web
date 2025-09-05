@@ -1,96 +1,137 @@
 from __future__ import annotations
 
-"""
-Orquesta el backup/restore de datos.
-
-- export_backup_bytes()  -> devuelve (bytes, filename)
-- import_backup_replace_processed(raw_bytes) -> reemplaza TODO el store con el backup
-
-Notas:
-- Por compatibilidad, si existe una implementación previa en `ta_core.repository`
-  para exportar, la reutilizamos (y normalizamos el tipo de retorno).
-- El import reemplaza TODO el store y limpia hashes.
-"""
-
-from typing import Tuple, Any, Dict, List, Optional
+# ---------------- Standard library ----------------
+from typing import Tuple, Dict, Any, Optional, List
+from datetime import datetime, timezone
+import io
 import json
-from datetime import datetime
+import os
+import zipfile
 
-# Dependencias de persistencia mínimas
-from ta_core.repository import load_store, save_store
+# ---------------- Third-party ----------------
+# (none)
 
-# Reutilizamos export si todavía existe en repository (compatibilidad)
-try:
-    from ta_core.repository import export_backup_bytes as _repo_export_backup_bytes  # type: ignore[attr-defined]
-except Exception:  # ImportError u otros: no lo tomamos como error fatal
-    _repo_export_backup_bytes = None  # type: ignore[assignment]
+# ---------------- Internal ----------------
+from ta_core.repository import load_store, save_store, load_hashes, save_hashes  # type: ignore[attr-defined]
 
+# ---------------------------------------------------------------------
+# Config / Paths
+# ---------------------------------------------------------------------
+def _repo_root() -> str:
+    # services/ -> ta_core/ -> <repo_root>  (3 niveles)
+    return os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 
-def _normalize_export_result(out: Any) -> Tuple[bytes, str]:
-    """
-    Acepta bytes o (bytes, filename) y devuelve una tupla normalizada.
-    """
-    if isinstance(out, tuple) and len(out) == 2 and isinstance(out[0], (bytes, bytearray)) and isinstance(out[1], str):
-        return bytes(out[0]), out[1]
-    if isinstance(out, (bytes, bytearray)):
-        return bytes(out), "tibia_analyzer_backup.json"
-    raise ValueError("Unexpected export result type; expected bytes or (bytes, filename).")
+def _data_dir() -> str:
+    # Permitir override por variable de entorno si quieres (opcional)
+    return os.environ.get("TA_DATA_DIR", os.path.join(_repo_root(), "data"))
 
+def _p_store() -> str: return os.path.join(_data_dir(), "store.jsonl")
+def _p_hashes() -> str: return os.path.join(_data_dir(), "hashes.json")
+def _p_userdata() -> str: return os.path.join(_data_dir(), "user_data.json")
+def _p_monsters() -> str: return os.path.join(_data_dir(), "monster_difficulty.csv")
 
-def _fallback_export_bytes() -> Tuple[bytes, str]:
-    """
-    Exportación de respaldo si no existe la función en repository.
-    Serializa el store tal cual a JSON.
-    """
-    data: List[Dict[str, Any]] = load_store()
-    payload: Dict[str, Any] = {
-        "version": 1,
-        "exported_at": datetime.utcnow().isoformat() + "Z",
-        "store": data,
-    }
-    raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    return raw, "tibia_analyzer_backup.json"
+_FILES: Dict[str, str] = {
+    "store.jsonl": _p_store(),
+    "hashes.json": _p_hashes(),
+    "user_data.json": _p_userdata(),
+    "monster_difficulty.csv": _p_monsters(),
+}
 
+_BACKUP_NAME = "tibia_analyzer_backup.zip"
+_MANIFEST = "manifest.json"
+_VERSION = 2  # v2 = multi-file zip with manifest
 
+# ---------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------
+def _read_file_bytes(path: str) -> Optional[bytes]:
+    try:
+        with open(path, "rb") as f:
+            return f.read()
+    except FileNotFoundError:
+        return None
+
+def _write_file_bytes(path: str, data: bytes) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "wb") as f:
+        f.write(data)
+
+def _is_zip(payload: bytes) -> bool:
+    return len(payload) >= 4 and payload[:4] == b"PK\x03\x04"
+
+# ---------------------------------------------------------------------
+# Export
+# ---------------------------------------------------------------------
 def export_backup_bytes() -> Tuple[bytes, str]:
     """
-    Exporta el backup completo de la aplicación.
-    Devuelve: (bytes, nombre_de_archivo)
+    Export all persistent app data in a single zip:
+    - store.jsonl
+    - hashes.json
+    - user_data.json
+    - monster_difficulty.csv
+
+    Returns (bytes, filename).
     """
-    # Si hay una exportación ya implementada en repository, la usamos.
-    if _repo_export_backup_bytes is not None:
-        out = _repo_export_backup_bytes()  # type: ignore[misc]
-        return _normalize_export_result(out)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+        manifest: Dict[str, Any] = {
+            "version": _VERSION,
+            "exported_at": datetime.now(timezone.utc).isoformat(),
+            "files": [],
+            "data_dir": _data_dir(),
+        }
+        for arcname, path in _FILES.items():
+            content = _read_file_bytes(path)
+            if content is None:
+                # Si el archivo no existe, incluimos entrada vacía pero lo listamos
+                content = b""
+            zf.writestr(arcname, content)
+            manifest["files"].append({"name": arcname, "size": len(content), "path": path})
+        zf.writestr(_MANIFEST, json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8"))
+    return buf.getvalue(), _BACKUP_NAME
 
-    # Si no, usamos el fallback local.
-    return _fallback_export_bytes()
-
-
+# ---------------------------------------------------------------------
+# Import
+# ---------------------------------------------------------------------
 def import_backup_replace_processed(raw_bytes: bytes) -> None:
     """
-    Importa un backup y **reemplaza** por completo el store actual.
+    Restore from a backup.
 
-    Formatos admitidos:
-      - Dict con clave "store": {"store": [...]}  (nuevo/fallback)
-      - Lista directa de registros: [...]         (compatibilidad)
-
-    Lanza ValueError/JSONDecodeError si el contenido no es válido.
+    Supported formats:
+    - v2 zip (this module): manifest.json + listed files (replaces ALL: store, hashes,
+      user_data, monster_difficulty).
+    - Legacy JSON (list) -> replaces only store.jsonl and clears hashes to avoid duplicates.
+    - Legacy JSON (object with "store": [...]) -> idem.
     """
+    if _is_zip(raw_bytes):
+        with zipfile.ZipFile(io.BytesIO(raw_bytes), "r") as zf:
+            for arcname, path in _FILES.items():
+                try:
+                    data = zf.read(arcname)
+                except KeyError:
+                    data = b""
+                _write_file_bytes(path, data)
+
+        # Tocar helpers para re-materializar caches si hacen lazy init
+        _ = load_store()
+        _ = load_hashes()
+        return
+
+    # --- Legacy JSON path (pre-v2) ---
     text = raw_bytes.decode("utf-8")
     obj: Any = json.loads(text)
 
-    # Detectar forma
-    data: Optional[List[Dict[str, Any]]] = None
-
+    data: Optional[List[Any]] = None
     if isinstance(obj, dict) and "store" in obj:
         maybe_list = obj.get("store")
         if not isinstance(maybe_list, list):
             raise ValueError("Backup 'store' must be a list.")
-        data = maybe_list  # type: ignore[assignment]
+        data = maybe_list
     elif isinstance(obj, list):
-        data = obj  # type: ignore[assignment]
+        data = obj
     else:
-        raise ValueError("Backup has unexpected shape. Expected object with 'store' or a list.")
+        raise ValueError("Unsupported backup format. Expected v2 zip or legacy JSON.")
 
-    # Reemplazar all el store
+    # Replace store and reset hashes for legacy imports
     save_store(data if data is not None else [])
+    save_hashes([])
