@@ -1,16 +1,7 @@
+from __future__ import annotations
 from dataclasses import dataclass
-from enum import Enum
-from typing import Optional
+from typing import Optional, Dict, Any
 
-class Vocation(Enum):
-    Knight = "Knight"
-    Paladin = "Paladin"
-    Druid = "Druid"
-    Sorcerer = "Sorcerer"
-
-class Mode(Enum):
-    Solo = "Solo"
-    Duo = "Duo"
 
 @dataclass
 class HuntRecord:
@@ -25,10 +16,14 @@ class HuntRecord:
     balance: int
     vocation: str
     mode: str
-    vocation_duo: Optional[str]
+    vocation_duo: str
     zona: str
     has_all_meta: bool
-    source_raw: dict
+    source_raw: Dict[str, Any]
+
+    # nuevo: identificador de propietario (se rellena en Upload_JSON, se cuenta al finalizar en Pending)
+    owner_user_id: Optional[str] = None
+
 
 @dataclass
 class AggregatedZone:

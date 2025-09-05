@@ -58,6 +58,8 @@ def load_hashes() -> List[str]:
 
 def save_hashes(hashes: List[str]) -> None:
     ensure_data_dirs()
+    # Deduplicar por si entran repetidos
+    hashes = list(dict.fromkeys(hashes))
     with open(HASHES_JSON, "w", encoding="utf-8") as f:
         json.dump(list(hashes), f, ensure_ascii=False)
 
@@ -74,75 +76,70 @@ def add_uploaded_files(files) -> Tuple[int, int]:
     """
     Añade JSONs al store aplicando dedupe por hash SHA-256.
     - `files` es la lista de UploadedFile de Streamlit.
-    - Devuelve (added_records, skipped_files).
+    - Devuelve (ok_count, fail_count).
     """
     ensure_data_dirs()
+    rows = load_store()
     hashes = set(load_hashes())
-    batch_seen = set()
 
-    to_append: List[Dict] = []
-    skipped = 0
+    ok = 0
+    fail = 0
+    # Caminos (hashes) nuevos detectados en esta subida (para sellar owner después si procede)
+    new_hashes_this_batch: List[str] = []
 
     for f in files:
         try:
-            data = f.getvalue()
-        except Exception:
-            try:
-                # Compat: algunos objetos similares exponen read()
-                data = f.read()
-            except Exception:
-                skipped += 1
+            data = f.read()
+            sha = hashlib.sha256(data).hexdigest()
+            if sha in hashes:
+                # Duplicado → lo saltamos
+                continue
+            # Parse JSON (puede ser objeto o lista de objetos)
+            obj = json.loads(data.decode("utf-8"))
+            if isinstance(obj, dict):
+                item = obj
+                # Asegurar flags mínimos
+                if "has_all_meta" not in item:
+                    item["has_all_meta"] = False
+                # NUEVO: owner vacío por defecto (se rellenará en la capa superior)
+                item.setdefault("owner_user_id", None)
+                rows.append(item)
+                ok += 1
+            elif isinstance(obj, list):
+                for item in obj:
+                    if not isinstance(item, dict):
+                        continue
+                    if "has_all_meta" not in item:
+                        item["has_all_meta"] = False
+                    item.setdefault("owner_user_id", None)  # NUEVO
+                    rows.append(item)
+                    ok += 1
+            else:
+                fail += 1
                 continue
 
-        h = hashlib.sha256(data).hexdigest()
-        if h in hashes or h in batch_seen:
-            skipped += 1
-            continue
-
-        # Parseamos JSON (objeto o array de objetos)
-        try:
-            obj = json.loads(data.decode("utf-8"))
+            hashes.add(sha)
+            new_hashes_this_batch.append(sha)
         except Exception:
-            skipped += 1
-            continue
+            fail += 1
 
-        if isinstance(obj, list):
-            for item in obj:
-                if isinstance(item, dict):
-                    to_append.append(item)
-        elif isinstance(obj, dict):
-            to_append.append(obj)
-        else:
-            # formato inválido
-            skipped += 1
-            continue
+    save_store(rows)
+    save_hashes(list(hashes))
 
-        # marcamos el hash como visto/guardado
-        batch_seen.add(h)
-        hashes.add(h)
-
-    added = len(to_append)
-    if added:
-        store = load_store()
-        store.extend(to_append)
-        save_store(store)
-        save_hashes(list(hashes))
-
-    return added, skipped
+    # Devolvemos (ok, fail). El sellado efectivo del owner lo hará la página Upload
+    # tras conocer el usuario actual. Aquí solo garantizamos el campo presente (None).
+    return ok, fail
 
 
 def dedupe_info() -> Dict:
-    """Devuelve info simple del estado de dedupe/almacenamiento."""
-    try:
-        store_count = len(load_store())
-    except Exception:
-        store_count = 0
-    try:
-        hashes_count = len(load_hashes())
-    except Exception:
-        hashes_count = 0
+    """
+    Devuelve información resumida para debug tras una subida/import.
+    """
+    rows = load_store()
+    hashes = load_hashes()
+    hashes_count = len(hashes)
     return {
-        "store_count": store_count,
+        "store_rows": len(rows),
         "hashes_count": hashes_count,
         "data_dir": DATA_DIR,
         "store_path": STORE_JSONL,
@@ -166,3 +163,26 @@ def export_backup_bytes() -> Tuple[bytes, str]:
     }
     data = json.dumps(obj, ensure_ascii=False, indent=2).encode("utf-8")
     return data, "tibia_analyzer_backup.json"
+
+
+# -----------------------
+# Conteos por usuario (total finalizado y pendientes)
+# -----------------------
+def get_user_counts() -> Dict[str, Dict[str, int]]:
+    """
+    Devuelve { user_id: {"total": X, "pending": Y} }.
+
+    - 'total' cuenta SOLO hunts con has_all_meta=True (finalizadas).
+    - 'pending' cuenta hunts con has_all_meta=False.
+    - Si un registro no tiene owner_user_id, se agrupa en 'unknown'.
+    """
+    rows = load_store()
+    by_user: Dict[str, Dict[str, int]] = {}
+    for rec in rows:
+        uid = rec.get("owner_user_id") or "unknown"
+        d = by_user.setdefault(uid, {"total": 0, "pending": 0})
+        if rec.get("has_all_meta", False):
+            d["total"] += 1
+        else:
+            d["pending"] += 1
+    return by_user
