@@ -7,6 +7,8 @@ from typing import Optional, Tuple
 import streamlit as st
 from supabase import create_client, Client
 from gotrue.errors import AuthApiError, AuthRetryableError
+from utils.debug_console import dbg, debug_enabled
+
 
 
 @st.cache_resource
@@ -35,17 +37,7 @@ def _to_text(msg: object) -> str:
 # Auth API
 # ----------------------------
 def signup(email: str, password: str, username: str) -> Tuple[bool, str]:
-    """
-    Crea un usuario con el payload soportado por supabase-py v2:
-      sb.auth.sign_up({
-        "email": ...,
-        "password": ...,
-        "options": {"data": {...}}
-      })
-    El trigger en la DB leerá user_metadata.data.username para poblar public.profiles.
-    """
     sb = get_supabase()
-
     email = (email or "").strip().lower()
     username = (username or "").strip()
     password = (password or "").strip()
@@ -56,35 +48,40 @@ def signup(email: str, password: str, username: str) -> Tuple[bool, str]:
         return False, "Password must be at least 8 characters."
 
     try:
-        sb.auth.sign_up(
-            {
-                "email": email,
-                "password": password,
-                "options": {
-                    "data": {"username": username}
-                },
-            }
-        )
+        if debug_enabled(): dbg("auth.signup.request", email=email, username=username, password=password)
+        res = sb.auth.sign_up({
+            "email": email,
+            "password": password,
+            "options": {"data": {"username": username}},
+        })
+        if debug_enabled(): dbg("auth.signup.response", raw=str(res))
         return True, "Check your inbox to confirm your email."
     except (AuthApiError, AuthRetryableError) as e:
+        if debug_enabled(): dbg("auth.signup.error", error=str(e))
         return False, _to_text(e)
     except Exception as e:
+        if debug_enabled(): dbg("auth.signup.exception", error=str(e))
         return False, str(e)
 
 
 def login(email: str, password: str) -> Tuple[bool, str]:
-    """
-    Login por contraseña (GoTrue v2).
-    """
     sb = get_supabase()
     email = (email or "").strip().lower()
     password = (password or "").strip()
-
     try:
-        sb.auth.sign_in_with_password({"email": email, "password": password})
+        if debug_enabled(): dbg("auth.login.request", email=email, password=password)
+        res = sb.auth.sign_in_with_password({"email": email, "password": password})
+        if debug_enabled():
+            sess = getattr(res, "session", None)
+            user = getattr(res, "user", None)
+            dbg("auth.login.response",
+                has_session=bool(sess),
+                has_user=bool(user),
+                access_token_len=len(getattr(sess, "access_token", "") or ""),
+                refresh_token_len=len(getattr(sess, "refresh_token", "") or ""))
         return True, "Signed in successfully."
     except AuthApiError as e:
-        # Mensajes habituales: "Invalid login credentials", "Email not confirmed"
+        if debug_enabled(): dbg("auth.login.error", error=str(e))
         msg = _to_text(e)
         if "Invalid login credentials" in msg:
             return False, "Invalid login credentials."
@@ -92,29 +89,36 @@ def login(email: str, password: str) -> Tuple[bool, str]:
             return False, "Email not confirmed. Please confirm your email."
         return False, msg
     except AuthRetryableError as e:
+        if debug_enabled(): dbg("auth.login.retryable", error=str(e))
         return False, _to_text(e)
     except Exception as e:
+        if debug_enabled(): dbg("auth.login.exception", error=str(e))
         return False, str(e)
 
 
 def logout() -> Tuple[bool, str]:
-    """Cierra la sesión actual."""
     sb = get_supabase()
     try:
+        if debug_enabled(): dbg("auth.logout.request")
         sb.auth.sign_out()
+        if debug_enabled(): dbg("auth.logout.ok")
         return True, "Signed out."
     except (AuthApiError, AuthRetryableError) as e:
+        if debug_enabled(): dbg("auth.logout.error", error=str(e))
         return False, _to_text(e)
     except Exception as e:
+        if debug_enabled(): dbg("auth.logout.exception", error=str(e))
         return False, str(e)
 
 
 def current_user_id() -> Optional[str]:
-    """Devuelve el id del usuario actual o None si no hay sesión."""
     sb = get_supabase()
     try:
-        u = sb.auth.get_user()
-        user = getattr(u, "user", None)
-        return getattr(user, "id", None)
-    except Exception:
+        res = sb.auth.get_user()
+        user = getattr(res, "user", None)
+        uid = getattr(user, "id", None)
+        if debug_enabled(): dbg("auth.me", has_user=bool(user), user_id=uid)
+        return uid
+    except Exception as e:
+        if debug_enabled(): dbg("auth.me.exception", error=str(e))
         return None
