@@ -139,8 +139,26 @@ if uid:
     with tab_profile:
         _profile_tab()
 else:
-    tab_login, tab_signup = st.tabs(["Login", "Sign up"])
-    with tab_login:
+    # Selector controlado en session_state para que no “salte” a Login tras el rerun
+    DEFAULT = "Login"
+    options = ["Login", "Sign up"]
+    current = st.session_state.get("account_mode", DEFAULT)
+    try:
+        start_index = options.index(current)
+    except ValueError:
+        start_index = 0
+
+    choice = st.radio(
+        label="Account mode",
+        options=options,
+        index=start_index,
+        horizontal=True,
+        label_visibility="collapsed",
+        key="account_mode",
+    )
+
+    if choice == "Login":
         _login_tab()
-    with tab_signup:
+    else:
         _signup_tab()
+

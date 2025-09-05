@@ -5,8 +5,17 @@ from ta_core.services.auth_service import (
     signup, login, logout, current_user_id, get_supabase
 )
 from utils.debug_console import get_log_text, clear_log, set_debug_enabled, debug_enabled
+from ta_core.auth_repo import get_role
 
 # NO st.set_page_config aquí (ya está en streamlit_app.py)
+
+# ---- solo admins ----
+_uid = current_user_id()
+_is_admin = bool(_uid) and (get_role(_uid) or "").lower() == "admin"
+if not _is_admin:
+    st.error("Solo admins pueden ver esta página.")
+    st.stop()
+# ----------------------
 
 st.title("Debug")
 
