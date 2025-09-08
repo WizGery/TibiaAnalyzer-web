@@ -95,8 +95,20 @@ def parse_real_balance(text: str) -> int:
         amount = to_int(nums[0])
         if has_neg and not has_pos:
             total -= amount
-        else:
+        elif has_pos and not has_neg:
             total += amount
+        else:
+            # Si hay palabras positivas y negativas en la misma línea,
+            # asumimos positivo si la primera coincidencia es positiva.
+            # (heurística simple)
+            first_pos = TRANSFER_POS_PAT.search(line)
+            first_neg = TRANSFER_NEG_PAT.search(line)
+            if first_pos and first_neg:
+                total += amount if first_pos.start() < first_neg.start() else -amount
+            elif first_pos:
+                total += amount
+            else:
+                total -= amount
     return total
 
 
@@ -186,13 +198,7 @@ def username_of(user_id: Optional[str]) -> str:
 # =========================
 # Filtrado por permisos
 # =========================
-st.title("Pending")
-
 uid = current_user_id()
-if not uid:
-    st.info("You must be logged in to see this page.")
-    st.stop()
-
 is_admin = (get_role(uid) or "").lower() == "admin"
 
 # 1) Si pending_df ya trae alguna columna de owner, úsala tal cual
@@ -225,8 +231,12 @@ else:
         username=pd.Series(dtype="object"),
     )
 
-# Detectar si NO hay dueño en ninguna fila
-no_owners = pending_df["owner_id"].replace("", pd.NA).isna().all() if not pending_df.empty else True
+# Agrupar por username para admins
+groups: Dict[str, pd.DataFrame] = {}
+no_owners = pending_df["owner_id"].isna().all() if not pending_df.empty else True
+if not pending_df.empty:
+    for uname, sub in pending_df.groupby(pending_df["username"].fillna("unknown")):
+        groups[str(uname)] = sub.copy()
 
 # Filtrado
 view_df = pending_df.copy()
@@ -258,11 +268,10 @@ else:
         st.stop()
 
     st.markdown(f"## Pending: {len(view_df)}")
-    groups = dict(tuple(view_df.groupby("username", dropna=False)))
 
 
 # =========================
-# Render de editores (flujo original)
+# Vistas por fila
 # =========================
 def top3_monsters(sr: Dict) -> List[str]:
     if isinstance(sr, str):
@@ -293,9 +302,12 @@ def top3_monsters(sr: Dict) -> List[str]:
 def pending_minitable(df_row: pd.DataFrame) -> pd.DataFrame:
     r = df_row.copy()
     m1, m2, m3 = [], [], []
-    for _, rr in r.iterrows():
-        t1, t2, t3 = top3_monsters(rr.get("source_raw", {}))
-        m1.append(t1); m2.append(t2); m3.append(t3)
+    try:
+        sr = r.iloc[0].get("source_raw", {})
+        top = top3_monsters(sr)
+        m1, m2, m3 = [top[0]], [top[1]], [top[2]]
+    except Exception:
+        pass
     view = pd.DataFrame({
         "Raw XP Gain": r.get("raw_xp_gain"),
         "XP Gain": r.get("xp_gain"),
@@ -373,18 +385,23 @@ def render_rows(rows_df: pd.DataFrame) -> None:
                 if st.button("Compute real balance", key=f"open_rb_{row.get('session_start')}_{idx}"):
                     st.session_state[f"show_rb_{row.get('session_start')}_{idx}"] = True
 
+                # ⬇️ FIX: sustituido expander anidado por container (evita StreamlitAPIException)
                 if st.session_state.get(f"show_rb_{row.get('session_start')}_{idx}", False):
-                    with st.expander("Compute real balance", expanded=True):
+                    with st.container(border=True):
+                        st.markdown("#### Compute real balance")
                         txt = st.text_area("Paste Party Hunt / Transfers text", height=200, key=f"ta_{row.get('session_start')}_{idx}")
-                        if st.button("Compute & apply", key=f"apply_{row.get('session_start')}_{idx}"):
-                            real = parse_real_balance(txt)
-                            st.session_state[f"calc_balance_{row.get('session_start')}_{idx}"] = real
-                            st.session_state[f"transfer_text_{row.get('session_start')}_{idx}"] = txt
-                            st.session_state[f"show_rb_{row.get('session_start')}_{idx}"] = False
-                            st.rerun()
-                        if st.button("Close", key=f"close_rb_{row.get('session_start')}_{idx}"):
-                            st.session_state[f"show_rb_{row.get('session_start')}_{idx}"] = False
-                            st.rerun()
+                        cols_rb = st.columns([1, 1, 8])
+                        with cols_rb[0]:
+                            if st.button("Compute & apply", key=f"apply_{row.get('session_start')}_{idx}"):
+                                real = parse_real_balance(txt)
+                                st.session_state[f"calc_balance_{row.get('session_start')}_{idx}"] = real
+                                st.session_state[f"transfer_text_{row.get('session_start')}_{idx}"] = txt
+                                st.session_state[f"show_rb_{row.get('session_start')}_{idx}"] = False
+                                st.rerun()
+                        with cols_rb[1]:
+                            if st.button("Close", key=f"close_rb_{row.get('session_start')}_{idx}"):
+                                st.session_state[f"show_rb_{row.get('session_start')}_{idx}"] = False
+                                st.rerun()
 
                 calc_val = st.session_state.get(f"calc_balance_{row.get('session_start')}_{idx}")
                 if calc_val is not None:
@@ -420,8 +437,10 @@ def render_rows(rows_df: pd.DataFrame) -> None:
             with cbtn2:
                 if st.button("➕ Add Supplies", key=f"add_sup_{row.get('session_start')}_{idx}"):
                     st.session_state[f"show_supplies_{row.get('session_start')}_{idx}"] = True
+                # ⬇️ FIX: sustituido expander anidado por container (evita StreamlitAPIException)
                 if st.session_state.get(f"show_supplies_{row.get('session_start')}_{idx}", False):
-                    with st.expander("Add Supplies", expanded=True):
+                    with st.container(border=True):
+                        st.markdown("#### Add Supplies")
                         st.write("WIP")
                         if st.button("Close", key=f"close_sup_{row.get('session_start')}_{idx}"):
                             st.session_state[f"show_supplies_{row.get('session_start')}_{idx}"] = False
