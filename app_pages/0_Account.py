@@ -153,6 +153,17 @@ def _profile_tab() -> None:
         st.info("Please sign in to view your profile.")
         return
 
+    # Si el botón dejó encolado un refresh en el ciclo anterior, ejecútalo ahora
+    if st.session_state.pop("do_account_refresh", False):
+        from ta_core.services import characters_service as _chars
+        # limpiar caché de API si existe
+        if hasattr(_chars, "_fetch_api_cached") and hasattr(_chars._fetch_api_cached, "clear"):
+            _chars._fetch_api_cached.clear()
+        # refresco normal (tu función no acepta 'force')
+        refresh_owned_characters(uid)
+        st.success("Characters refreshed!")
+        st.rerun()
+
     prof = get_profile(uid) or {}
     st.subheader("")
 
@@ -168,18 +179,17 @@ def _profile_tab() -> None:
         st.button("Character information", on_click=lambda: _to("character_info"), use_container_width=True)
         st.button("Equipment", on_click=lambda: _to("equipment"), use_container_width=True)
         st.button("WoD", on_click=lambda: _to("wod"), use_container_width=True)
-        # --- Refresh button ---
 
-        def force_refresh():
-            from ta_core.services import characters_service as _chars
-            if hasattr(_chars, "refresh_owned_characters"):
-                # limpiar cache api si existe
-                if hasattr(_chars, "_fetch_api_cached") and hasattr(_chars._fetch_api_cached, "clear"):
-                    _chars._fetch_api_cached.clear()
-                _chars.refresh_owned_characters(user_id=uid, force=True)
-                st.success("Characters refreshed!")
-                st.rerun()
-        st.button("Refresh", on_click=force_refresh, use_container_width=True)
+        # Botón Refresh (mismo estilo que el resto)
+        def _queue_refresh() -> None:
+            st.session_state["do_account_refresh"] = True  # se procesará al inicio del próximo ciclo
+
+        st.button(
+            "Refresh",
+            key="btn_account_refresh",     # key única para evitar colisiones
+            on_click=_queue_refresh,
+            use_container_width=True,
+        )
 
         def _do_logout() -> None:
             logout()
@@ -206,7 +216,7 @@ def _profile_tab() -> None:
             unsafe_allow_html=True,
         )
 
-    # --- Characters (grid de filas con columns: 1 solo nivel de anidación) ---
+    # --- Characters (grid) ---
     with col_chars:
         st.markdown(
             """
@@ -225,7 +235,7 @@ def _profile_tab() -> None:
             PER_ROW = 3
             idx = 0
             while idx < len(chars):
-                row_cols = st.columns(PER_ROW, gap="large")  # <-- un único nivel permitido
+                row_cols = st.columns(PER_ROW, gap="large")
                 for c in row_cols:
                     if idx >= len(chars):
                         break
@@ -233,6 +243,7 @@ def _profile_tab() -> None:
                     idx += 1
                     with c:
                         _character_card(uid, ch)
+
 
 
 # ----------------------------
