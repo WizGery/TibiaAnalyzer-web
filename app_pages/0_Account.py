@@ -168,6 +168,18 @@ def _profile_tab() -> None:
         st.button("Character information", on_click=lambda: _to("character_info"), use_container_width=True)
         st.button("Equipment", on_click=lambda: _to("equipment"), use_container_width=True)
         st.button("WoD", on_click=lambda: _to("wod"), use_container_width=True)
+        # --- Refresh button ---
+
+        def force_refresh():
+            from ta_core.services import characters_service as _chars
+            if hasattr(_chars, "refresh_owned_characters"):
+                # limpiar cache api si existe
+                if hasattr(_chars, "_fetch_api_cached") and hasattr(_chars._fetch_api_cached, "clear"):
+                    _chars._fetch_api_cached.clear()
+                _chars.refresh_owned_characters(user_id=uid, force=True)
+                st.success("Characters refreshed!")
+                st.rerun()
+        st.button("Refresh", on_click=force_refresh, use_container_width=True)
 
         def _do_logout() -> None:
             logout()
