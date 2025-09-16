@@ -3,7 +3,7 @@ from __future__ import annotations
 # ---------------- Standard library ----------------
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 import re
 import time
 import os
@@ -38,9 +38,10 @@ class OwnedChar:
 
 # ---------------------------------------------------------------------
 # Helpers de persistencia en data/user_data.json
+#   ⚠️ Persistimos SOLO el NOMBRE del personaje por usuario.
 # ---------------------------------------------------------------------
-def _load_user_data() -> Dict:
-    """Carga all el JSON de data/user_data.json. Devuelve {} si no existe o está corrupto."""
+def _load_user_data() -> Dict[str, Any]:
+    """Carga todo el JSON de data/user_data.json. Devuelve {} si no existe o está corrupto."""
     try:
         if not os.path.exists(USER_FILE):
             return {}
@@ -51,13 +52,55 @@ def _load_user_data() -> Dict:
         return {}
 
 
-def _save_user_data(data: Dict) -> None:
-    """Guarda all el JSON en user_data.json con escritura atómica."""
+def _save_user_data(data: Dict[str, Any]) -> None:
+    """Guarda el JSON en user_data.json con escritura atómica."""
     os.makedirs(os.path.dirname(USER_FILE), exist_ok=True)
     tmp_path = USER_FILE + ".tmp"
     with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
     os.replace(tmp_path, USER_FILE)
+
+
+def _load_all_characters() -> Dict[str, List[Dict[str, str]]]:
+    """
+    Devuelve el mapa user_id -> list[{ "name": str }].
+    Hace compactación silenciosa si detecta formato antiguo con campos extra.
+    """
+    data = _load_user_data()
+    chars = data.get("characters", {})
+    if not isinstance(chars, dict):
+        return {}
+
+    changed = False
+    for uid, items in list(chars.items()):
+        if not isinstance(items, list):
+            chars[uid] = []
+            changed = True
+            continue
+        new_items: List[Dict[str, str]] = []
+        for it in items:
+            if isinstance(it, dict):
+                nm = str(it.get("name", "")).strip()
+            else:
+                nm = str(it or "").strip()
+            if nm:
+                new_items.append({"name": nm})
+        if new_items != items:
+            chars[uid] = new_items
+            changed = True
+
+    if changed:
+        data["characters"] = chars
+        _save_user_data(data)
+
+    return chars
+
+
+def _save_all_characters(char_map: Dict[str, List[Dict[str, str]]]) -> None:
+    """Guarda el mapa user_id -> list[{name}] en user_data.json."""
+    data = _load_user_data()
+    data["characters"] = char_map
+    _save_user_data(data)
 
 
 # ---------------------------------------------------------------------
@@ -96,58 +139,128 @@ def generate_or_get_code(user_id: str, char_name: str) -> Tuple[str, datetime]:
 
 
 # ---------------------------------------------------------------------
-# Persistencia de "propiedad" del personaje en user_data.json
+# Caché en memoria de proceso (Streamlit) para SNAPSHOTS + TIMESTAMPS
+#   - Estructura:
+#     {
+#       user_id: {
+#         char_lower: {
+#           "snapshot": {"world": str, "vocation": str, "level": int, "verified_at": str},
+#           "level_ts": ISO8601,
+#           "world_ts": ISO8601
+#         }
+#       }
+#     }
+#   - Vive por proceso; se reinicia al reiniciar el servidor.
 # ---------------------------------------------------------------------
-def _load_all_characters() -> Dict[str, List[Dict]]:
-    """Devuelve el mapa user_id -> list[char dict]."""
-    data = _load_user_data()
-    chars = data.get("characters", {})
-    return chars if isinstance(chars, dict) else {}
+@st.cache_resource(show_spinner=False)
+def _char_store() -> Dict[str, Dict[str, Dict[str, Any]]]:
+    return {}
 
 
-def _save_all_characters(char_map: Dict[str, List[Dict]]) -> None:
-    """Guarda el mapa user_id -> list[char dict] en user_data.json."""
-    data = _load_user_data()
-    data["characters"] = char_map
-    _save_user_data(data)
+def _get_entry(user_id: str, char_name: str) -> Dict[str, Any]:
+    store = _char_store()
+    u = store.setdefault(user_id, {})
+    return u.setdefault((char_name or "").strip().lower(), {})
 
 
+def _get_snapshot(user_id: str, char_name: str) -> Dict[str, Any]:
+    e = _get_entry(user_id, char_name)
+    snap = e.get("snapshot") or {}
+    # valores seguros por defecto
+    return {
+        "world": str(snap.get("world") or "—"),
+        "vocation": str(snap.get("vocation") or "—"),
+        "level": int(snap.get("level") or 0),
+        "verified_at": str(snap.get("verified_at") or ""),
+    }
+
+
+def _set_snapshot(user_id: str, char_name: str, world: str, vocation: str, level: int, verified_at: str = "") -> None:
+    e = _get_entry(user_id, char_name)
+    e["snapshot"] = {
+        "world": str(world or "—"),
+        "vocation": str(vocation or "—"),
+        "level": int(level or 0),
+        "verified_at": str(verified_at or ""),
+    }
+
+
+def _get_ts(user_id: str, char_name: str, key: str) -> Optional[datetime]:
+    e = _get_entry(user_id, char_name)
+    iso = e.get(key)
+    if not iso:
+        return None
+    try:
+        return datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _touch_ts(user_id: str, char_name: str, key: str) -> None:
+    e = _get_entry(user_id, char_name)
+    e[key] = datetime.now(timezone.utc).isoformat()
+
+
+def _need_level_refresh(user_id: str, char_name: str) -> bool:
+    last = _get_ts(user_id, char_name, "level_ts")
+    if last is None:
+        return True
+    return (datetime.now(timezone.utc) - last) >= timedelta(minutes=1)
+
+
+def _need_world_refresh(user_id: str, char_name: str) -> bool:
+    last = _get_ts(user_id, char_name, "world_ts")
+    if last is None:
+        return True
+    return (datetime.now(timezone.utc) - last) >= timedelta(days=30)
+
+
+# ---------------------------------------------------------------------
+# Persistencia de "propiedad" (solo nombre) en user_data.json
+# ---------------------------------------------------------------------
 def add_owned_character(user_id: str, char: OwnedChar) -> None:
+    """
+    Añade un personaje persistiendo únicamente su nombre.
+    Evita duplicados por nombre (case-insensitive).
+    Además, inicializa snapshot en caché si venía en 'char'.
+    """
     char_map = _load_all_characters()
     items = char_map.get(user_id, [])
-    # Evitar duplicados por nombre (case-insensitive)
     if not any((c.get("name") or "").lower() == char.name.lower() for c in items):
-        now_iso = datetime.now(timezone.utc).isoformat()
-        items.append({
-            "name": char.name,
-            "world": char.world,
-            "vocation": char.vocation,
-            "level": int(char.level),
-            "verified_at": char.verified_at,
-            # timestamps de refresco (sellamos ahora mismo)
-            "level_ts": now_iso,
-            "world_ts": now_iso,
-        })
+        items.append({"name": char.name})
     char_map[user_id] = items
     _save_all_characters(char_map)
 
+    # Semilla de caché con lo que tengamos (si lo hay)
+    _set_snapshot(user_id, char.name, char.world, char.vocation, char.level, char.verified_at)
+    _touch_ts(user_id, char.name, "level_ts")
+    _touch_ts(user_id, char.name, "world_ts")
+
 
 def list_owned_characters(user_id: str) -> List[OwnedChar]:
+    """
+    Devuelve lista de OwnedChar usando el snapshot en caché si existe
+    (muestra datos reales entre reruns), y valores seguros si no hay snapshot.
+    """
     items = _load_all_characters().get(user_id, [])  # default: []
     out: List[OwnedChar] = []
     for c in items:
+        name = str(c.get("name", "")).strip()
+        if not name:
+            continue
+        snap = _get_snapshot(user_id, name)
         out.append(OwnedChar(
-            name=str(c.get("name", "")),
-            world=str(c.get("world", "—")),
-            vocation=str(c.get("vocation", "—")),
-            level=int(c.get("level", 0) or 0),
-            verified_at=str(c.get("verified_at", "")),
+            name=name,
+            world=snap["world"],
+            vocation=snap["vocation"],
+            level=snap["level"],
+            verified_at=snap["verified_at"],
         ))
     return out
 
 
 def remove_owned_character(user_id: str, char_name: str) -> bool:
-    """Elimina un personaje 'propiedad' del usuario. Devuelve True si eliminó algo."""
+    """Elimina un personaje 'propiedad' del usuario y borra su entrada en caché."""
     char_map = _load_all_characters()
     items = char_map.get(user_id, [])
     before = len(items)
@@ -155,6 +268,9 @@ def remove_owned_character(user_id: str, char_name: str) -> bool:
     char_map[user_id] = items
     if len(items) != before:
         _save_all_characters(char_map)
+        # limpiar caché
+        u = _char_store().get(user_id, {})
+        u.pop((char_name or "").strip().lower(), None)
         return True
     return False
 
@@ -162,7 +278,7 @@ def remove_owned_character(user_id: str, char_name: str) -> bool:
 # ---------------------------------------------------------------------
 # Integración con API pública (TibiaData v3) - parser tolerante
 # ---------------------------------------------------------------------
-def fetch_character_from_api(char_name: str) -> Optional[Dict]:
+def fetch_character_from_api(char_name: str) -> Optional[Dict[str, Any]]:
     """
     Devuelve el dict del personaje desde TibiaData v3 o None si no se pudo obtener.
     Estructuras conocidas:
@@ -178,7 +294,11 @@ def fetch_character_from_api(char_name: str) -> Optional[Dict]:
     if resp.status_code != 200:
         return None
 
-    data = resp.json() or {}
+    try:
+        data = resp.json() or {}
+    except ValueError:
+        return None
+
     root = data.get("characters") or data.get("character") or {}
     if isinstance(root, dict) and isinstance(root.get("character"), dict):
         return root["character"]
@@ -228,13 +348,13 @@ def _fetch_comment_from_tibia_com(char_name: str) -> Optional[str]:
 
 
 @st.cache_data(ttl=60, show_spinner=False)
-def _fetch_api_cached(char_name: str) -> Optional[Dict]:
+def _fetch_api_cached(char_name: str) -> Optional[Dict[str, Any]]:
     """Wrapper cacheado de la API pública para aliviar reruns."""
     return fetch_character_from_api(char_name)
 
 
 @st.cache_data(ttl=60, show_spinner=False)
-def _fetch_tibiacom_details(char_name: str) -> Optional[Dict]:
+def _fetch_tibiacom_details(char_name: str) -> Optional[Dict[str, Any]]:
     """
     Devuelve dict con {name, level, world, vocation} scrapeando la tabla 'Character Information'.
     """
@@ -278,20 +398,18 @@ def _fetch_tibiacom_details(char_name: str) -> Optional[Dict]:
 
 def _fetch_comment_from_api(char_name: str, retries: int = 2, delay: float = 0.7) -> Optional[str]:
     """
-    Intenta obtener el 'comment' desde TibiaData v3 con pequeños reintentos
-    (la API puede estar cacheada o momentáneamente caída).
+    Intenta obtener el 'comment' desde TibiaData v3 con pequeños reintentos.
     Devuelve None si la llamada falla, '' si no hay comment.
     """
     for _ in range(retries):
-        info = fetch_character_from_api(char_name)  # ya es tolerante a errores/red
+        info = fetch_character_from_api(char_name)
         if info is not None:
-            # algunos mirrors usan 'commentary'
             return str(info.get("comment") or info.get("commentary") or "")
         time.sleep(delay)
     return None
 
 
-def _details_via_api_or_scrape(char_name: str) -> Optional[Dict]:
+def _details_via_api_or_scrape(char_name: str) -> Optional[Dict[str, Any]]:
     """Intenta API; si falta algo o no responde, cae a tibia.com."""
     api = _fetch_api_cached(char_name)
     if isinstance(api, dict) and api:
@@ -312,10 +430,7 @@ def _details_via_api_or_scrape(char_name: str) -> Optional[Dict]:
 def verify_character_code(user_id: str, char_name: str) -> bool:
     """
     Verifica que el comentario del personaje contiene el código vigente.
-    Orden:
-      1) TibiaData v3 (API) con pequeños reintentos
-      2) Fallback: tibia.com (scrape mínimo)
-    Si verifica, guarda la propiedad y devuelve True.
+    Si verifica, añade el personaje (solo nombre) y sembramos caché de snapshot.
     """
     cleaned = (char_name or "").strip()
     if not cleaned:
@@ -336,137 +451,97 @@ def verify_character_code(user_id: str, char_name: str) -> bool:
     if comment is not None:
         st.session_state["_last_verify_comment"] = comment
         if code in comment:
-            # Snapshot de datos (si API responde, tomamos de ahí; si no, mínimos)
             info = fetch_character_from_api(cleaned)
+            world = str((info.get("world") if info else "—") or "—")
+            vocation = str((info.get("vocation") if info else "—") or "—")
+            level = int((info.get("level") if info else 0) or 0)
+            verified_at = datetime.now(timezone.utc).isoformat()
+
+            # persistimos solo nombre y cacheamos snapshot
             oc = OwnedChar(
                 name=str((info.get("name") if info else cleaned) or cleaned),
-                world=str((info.get("world") if info else "—") or "—"),
-                vocation=str((info.get("vocation") if info else "—") or "—"),
-                level=int((info.get("level") if info else 0) or 0),
-                verified_at=datetime.now(timezone.utc).isoformat(),
+                world=world,
+                vocation=vocation,
+                level=level,
+                verified_at=verified_at,
             )
             add_owned_character(user_id, oc)
             return True
 
-    # 2) Fallback tibia.com si API no devolvió comment o no contenía el código
+    # 2) Fallback tibia.com
     comment = _fetch_comment_from_tibia_com(cleaned)
     st.session_state["_last_verify_comment"] = comment or ""
-    if comment is None:
-        return False
-    if code not in comment:
+    if comment is None or code not in comment:
         return False
 
-    # Snapshot con best-effort de API (si está disponible)
     info = fetch_character_from_api(cleaned)
+    world = str((info.get("world") if info else "—") or "—")
+    vocation = str((info.get("vocation") if info else "—") or "—")
+    level = int((info.get("level") if info else 0) or 0)
+    verified_at = datetime.now(timezone.utc).isoformat()
+
     oc = OwnedChar(
         name=str((info.get("name") if info else cleaned) or cleaned),
-        world=str((info.get("world") if info else "—") or "—"),
-        vocation=str((info.get("vocation") if info else "—") or "—"),
-        level=int((info.get("level") if info else 0) or 0),
-        verified_at=datetime.now(timezone.utc).isoformat(),
+        world=world,
+        vocation=vocation,
+        level=level,
+        verified_at=verified_at,
     )
     add_owned_character(user_id, oc)
     return True
 
 
 # ---------------------------------------------------------------------
-# Reglas de refresco por campo
-#   - level: cada 1 minuto
-#   - world: cada 30 días
-#   - name y vocation: estáticos (solo si estaban vacíos)
+# Refresco de personajes usando CACHÉ (snapshot + timestamps)
+#   - level: cada 1 minuto (según level_ts)
+#   - world: cada 30 días (según world_ts)
+#   - Si no toca refrescar, se usa el snapshot en caché.
+#   - Si toca, se consulta y se actualiza snapshot + timestamps en caché.
+#   - No se persisten datos dinámicos en disco.
 # ---------------------------------------------------------------------
-def _now_utc() -> datetime:
-    return datetime.now(timezone.utc)
-
-
-def _touch_ts(d: Dict, key: str) -> None:
-    d[key] = _now_utc().isoformat()
-
-
-def _parse_ts(s: Optional[str]) -> Optional[datetime]:
-    if not s:
-        return None
-    try:
-        return datetime.fromisoformat(s.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-
-
-def _should_refresh(last_iso: Optional[str], delta: timedelta) -> bool:
-    last = _parse_ts(last_iso)
-    if last is None:
-        return True
-    return (_now_utc() - last) >= delta
-
-
 def refresh_owned_characters(user_id: str) -> List[OwnedChar]:
     """
-    Aplica reglas de refresco a cada personaje del usuario:
-      - level: cada 1 minuto (o si es 0)
-      - world: cada 30 días (o si está vacío/'—')
-      - name/vocation: no se tocan salvo que estuvieran vacíos
-    Devuelve la lista actualizada (tipada).
+    Devuelve un snapshot consistente para la UI.
+    Si hay datos en caché recientes, se muestran incluso tras un rerun.
     """
     char_map = _load_all_characters()
     items = char_map.get(user_id, [])
-    changed = False
+    out: List[OwnedChar] = []
 
     for c in items:
         name = str(c.get("name", "")).strip()
         if not name:
             continue
 
-        cur_level = int(c.get("level", 0) or 0)
-        cur_world = str(c.get("world", "") or "").strip()
+        need_level = _need_level_refresh(user_id, name)
+        need_world = _need_world_refresh(user_id, name)
 
-        need_level = (cur_level == 0) or _should_refresh(c.get("level_ts"), timedelta(minutes=1))
-        need_world = (cur_world in {"", "—", "-"}) or _should_refresh(c.get("world_ts"), timedelta(days=30))
-
-        v_raw = str(c.get("vocation", "") or "").strip()
-        need_vocation_if_missing = (v_raw == "" or v_raw in {"—", "-"})
-
-        # Solo pedimos detalles si hace falta refrescar algo
-        details: Optional[Dict] = None
-        if need_level or need_world or need_vocation_if_missing:
+        details: Optional[Dict[str, Any]] = None
+        if need_level or need_world:
             details = _details_via_api_or_scrape(name) or {}
+            # actualizar snapshot y timestamps si tenemos info
+            if "level" in details:
+                _touch_ts(user_id, name, "level_ts")
+            if "world" in details:
+                _touch_ts(user_id, name, "world_ts")
+            if details:
+                _set_snapshot(
+                    user_id,
+                    name,
+                    world=str(details.get("world") or "—"),
+                    vocation=str(details.get("vocation") or "—"),
+                    level=int(details.get("level") or 0),
+                    verified_at="",  # opcional
+                )
 
-        # vocation: solo si faltaba
-        if need_vocation_if_missing and details.get("vocation"):
-            c["vocation"] = str(details["vocation"])
-
-        # level: cada minuto (o si era 0)
-        if need_level and (details and details.get("level") is not None):
-            c["level"] = int(details["level"])
-            _touch_ts(c, "level_ts")
-            changed = True
-        elif c.get("level_ts") is None:
-            _touch_ts(c, "level_ts")
-
-        # world: cada 30 días (o si estaba vacío)
-        if need_world and (details and details.get("world") is not None):
-            c["world"] = str(details["world"])
-            _touch_ts(c, "world_ts")
-            changed = True
-        elif c.get("world_ts") is None:
-            _touch_ts(c, "world_ts")
-
-        # aseguramos tipos/valores seguros
-        c["level"] = int(c.get("level", 0) or 0)
-        c["world"] = str(c.get("world", "—") or "—")
-        c["vocation"] = str(c.get("vocation", "—") or "—")
-
-    if changed:
-        char_map[user_id] = items
-        _save_all_characters(char_map)
-
-    # salida tipada
-    out: List[OwnedChar] = []
-    for c in items:
+        # construir desde snapshot de caché (o seguros)
+        snap = _get_snapshot(user_id, name)
         out.append(OwnedChar(
-            name=str(c.get("name", "")),
-            world=str(c.get("world", "—")),
-            vocation=str(c.get("vocation", "—")),
-            level=int(c.get("level", 0) or 0),
-            verified_at=str(c.get("verified_at", "")),
+            name=name,
+            world=snap["world"],
+            vocation=snap["vocation"],
+            level=snap["level"],
+            verified_at=snap["verified_at"],
         ))
+
     return out
